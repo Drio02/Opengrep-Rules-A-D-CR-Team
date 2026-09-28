@@ -1,0 +1,164 @@
+rules:
+- id: rust-sqli-format-string
+  languages:
+  - rust
+  severity: ERROR
+  message: SQL query construida con format!/concat + entrada. Usa binds ($1, $2) o query parametrizada.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: sqlx::query(&format!(...))
+  - pattern: sqlx::query_as(&format!(...))
+  - pattern: diesel::sql_query(format!(...))
+  - pattern: $CONN.execute(&format!(...), $A)
+  - pattern: $CONN.query(&format!(...), $A)
+- id: rust-command-injection
+  languages:
+  - rust
+  severity: ERROR
+  message: Ejecucion de comando via shell con string dinamico.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Command::new("sh").arg("-c").arg($X)
+  - pattern: Command::new("bash").arg("-c").arg($X)
+  - pattern: Command::new($X).arg(format!(...))
+- id: rust-path-traversal
+  languages:
+  - rust
+  severity: WARNING
+  message: Path construido con format! sobre entrada. Verifica canonicalizacion y whitelist.
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: std::fs::read(format!(...))
+  - pattern: std::fs::read_to_string(format!(...))
+  - pattern: std::fs::File::open(format!(...))
+  - pattern: File::open(format!(...))
+  - pattern: tokio::fs::read(format!(...))
+  - pattern: tokio::fs::read_to_string(format!(...))
+  - pattern: PathBuf::from(format!(...))
+- id: rust-xxe-libxml
+  languages:
+  - rust
+  severity: WARNING
+  message: Bindings libxml2 resuelven entidades por defecto (XXE). Prefiere quick-xml/roxmltree.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: libxml::parser::Parser::default()
+  - pattern: libxml::parser::Parser::default_html()
+- id: rust-ssrf-reqwest
+  languages:
+  - rust
+  severity: WARNING
+  message: URL construida con entrada externa (reqwest). Whitelist de host y bloqueo de rangos privados.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: reqwest::get(format!(...))
+  - pattern: reqwest::get(&format!(...))
+  - pattern: $C.get(format!(...))
+  - pattern: $C.post(format!(...))
+- id: rust-tls-verification-disabled
+  languages:
+  - rust
+  severity: ERROR
+  message: Verificacion TLS desactivada. MITM trivial.
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: $X.danger_accept_invalid_certs(true)
+  - pattern: $X.danger_accept_invalid_hostnames(true)
+- id: rust-unsafe-block
+  languages:
+  - rust
+  severity: INFO
+  message: Uso de unsafe. Revisa invariantes de memoria (UB, punteros, transmute).
+  metadata:
+    category: security
+    cwe: CWE-119
+    confidence: LOW
+  pattern-either:
+  - pattern: std::mem::transmute($X)
+  - pattern: std::slice::from_raw_parts($X, $Y)
+  - pattern: String::from_raw_parts($X, $Y, $Z)
+  - pattern: Vec::from_raw_parts($X, $Y, $Z)
+- id: rust-unsafe-deserialization
+  languages:
+  - rust
+  severity: WARNING
+  message: Deserializacion binaria puede permitir type-confusion con input no confiable.
+  metadata:
+    category: security
+    cwe: CWE-502
+    confidence: LOW
+  pattern-either:
+  - pattern: bincode::deserialize($X)
+  - pattern: rmp_serde::from_slice($X)
+  - pattern: serde_pickle::from_slice($X)
+- id: rust-hardcoded-secret
+  languages:
+  - rust
+  severity: ERROR
+  message: Constante que parece secreto/token hardcodeado.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: 'const $N: &str = "...";'
+    - pattern: 'static $N: &str = "...";'
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i).*(SECRET|JWT|TOKEN|PASSWORD|API_?KEY|_KEY|_PWD).*
+- id: rust-weak-prng
+  languages:
+  - rust
+  severity: WARNING
+  message: rand::thread_rng/random no es CS-PRNG. Usa OsRng o getrandom para tokens.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: LOW
+  pattern-either:
+  - pattern: rand::thread_rng()
+  - pattern: rand::random()
+- id: rust-idor-candidate
+  languages:
+  - rust
+  severity: WARNING
+  message: 'CANDIDATO IDOR: lookup por id. Verifica owner-check antes de responder.'
+  metadata:
+    category: security
+    cwe: CWE-639
+    confidence: LOW
+  pattern-either:
+  - pattern: $T::find_by_id($ID)
+  - pattern: $T::by_id($ID)
+  - pattern: diesel::QueryDsl::find($T, $ID)
+- id: rust-unwrap-in-handler
+  languages:
+  - rust
+  severity: INFO
+  message: .unwrap() sobre valor de request -> panic (DoS).
+  metadata:
+    category: security
+    cwe: CWE-248
+    confidence: LOW
+  pattern-either:
+  - pattern: $X.parse::<$T>().unwrap()
+  - pattern: std::str::from_utf8($X).unwrap()

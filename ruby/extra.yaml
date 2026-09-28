@@ -1,0 +1,78 @@
+rules:
+- id: ruby-ssrf-cloud-metadata
+  languages:
+  - ruby
+  severity: ERROR
+  message: HTTP request a metadata cloud. Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: Net::HTTP.get(URI($URL))
+    - pattern: open($URL)
+    - pattern: URI.open($URL)
+    - pattern: HTTP.get($URL)
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: ruby-redos
+  languages:
+  - ruby
+  severity: WARNING
+  message: Regexp con nested quantifiers. Cadena maliciosa causa DoS.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: Regexp.new($PAT)
+    - pattern: Regexp.compile($PAT)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: ruby-graphql-introspection
+  languages:
+  - ruby
+  severity: WARNING
+  message: graphql-ruby con disable_introspection_entry_points ausente. Revisa produccion.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: LOW
+    context: graphql
+  pattern-regex: class\s+\w+\s*<\s*GraphQL::Schema\b
+- id: ruby-jwt-alg-none-or-confusion
+  languages:
+  - ruby
+  severity: ERROR
+  message: JWT.decode acepta 'none' o mezcla algoritmos. Firma falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  patterns:
+  - pattern: JWT.decode($T, $K, $VERIFY, $OPTS)
+  - metavariable-regex:
+      metavariable: $OPTS
+      regex: (?i).*algorithm.*(none|HS\d+.*RS\d+).*
+- id: ruby-backdoor-magic-string
+  languages:
+  - ruby
+  severity: WARNING
+  message: Comparacion contra string 'magico'. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: $X == $MAGIC
+    - pattern: $X.eql?($MAGIC)
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

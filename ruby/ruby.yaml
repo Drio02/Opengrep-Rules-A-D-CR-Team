@@ -1,0 +1,151 @@
+rules:
+  # ---------------------------------------------------------------
+  # Command execution
+  # ---------------------------------------------------------------
+  - id: ruby-shell-exec-user
+    message: >
+      Shell execution with user input is command injection.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-78"
+    pattern-either:
+      - pattern: system($X)
+      - pattern: "`...#{...}...`"
+      - pattern: exec($X)
+      - pattern: IO.popen($X)
+      - pattern: Open3.popen3($X)
+      - pattern: Open3.capture2($X)
+      - pattern: Kernel.spawn($X)
+
+  # ---------------------------------------------------------------
+  # eval / dynamic code
+  # ---------------------------------------------------------------
+  - id: ruby-eval-user-input
+    message: eval with user input = RCE.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-95"
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: instance_eval($X)
+      - pattern: class_eval($X)
+      - pattern: module_eval($X)
+
+  - id: ruby-send-user-method
+    message: >
+      .send with user-controlled method name allows calling arbitrary
+      methods including :eval, :system.
+    severity: WARNING
+    languages: [ruby]
+    pattern-either:
+      - pattern: $OBJ.send(params[$X], ...)
+      - pattern: $OBJ.public_send(params[$X], ...)
+      - pattern: $OBJ.__send__(params[$X], ...)
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: ruby-marshal-load-untrusted
+    message: >
+      Marshal.load on user input allows arbitrary object instantiation
+      → RCE via gadget chains.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-502"
+    pattern-either:
+      - pattern: Marshal.load($X)
+      - pattern: Marshal.restore($X)
+
+  - id: ruby-yaml-load-unsafe
+    message: >
+      YAML.load (not safe_load) instantiates arbitrary classes.
+    severity: ERROR
+    languages: [ruby]
+    pattern-either:
+      - pattern: YAML.load($X)
+      - pattern: YAML.load_file($X)
+
+  # ---------------------------------------------------------------
+  # Path traversal
+  # ---------------------------------------------------------------
+  - id: ruby-file-op-user
+    message: >
+      File operation with user-controlled path. Validate with
+      File.expand_path + start_with? against a root.
+    severity: WARNING
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-22"
+    pattern-either:
+      - pattern: File.open(params[$X], ...)
+      - pattern: File.read(params[$X])
+      - pattern: File.write(params[$X], ...)
+      - pattern: IO.read(params[$X])
+      - pattern: send_file(params[$X])
+
+  # ---------------------------------------------------------------
+  # SQL injection
+  # ---------------------------------------------------------------
+  - id: ruby-active-record-string-interp
+    message: >
+      ActiveRecord query built with string interpolation. SQL injection.
+      Use parameterized queries or ? placeholders.
+    severity: ERROR
+    languages: [ruby]
+    metadata:
+      cwe: "CWE-89"
+    pattern-either:
+      - pattern: $M.where("...#{params[$X]}...")
+      - pattern: $M.find_by_sql("...#{params[$X]}...")
+      - pattern: $M.order("...#{params[$X]}...")
+
+  # ---------------------------------------------------------------
+  # SSRF
+  # ---------------------------------------------------------------
+  - id: ruby-http-user-url
+    message: HTTP request with user-controlled URL without host allowlist.
+    severity: WARNING
+    languages: [ruby]
+    pattern-either:
+      - pattern: Net::HTTP.get(URI(params[$X]))
+      - pattern: Net::HTTP.get_response(URI(params[$X]))
+      - pattern: open(params[$X])
+      - pattern: URI.open(params[$X])
+      - pattern: HTTParty.get(params[$X])
+      - pattern: RestClient.get(params[$X])
+
+  # ---------------------------------------------------------------
+  # Weak crypto
+  # ---------------------------------------------------------------
+  - id: ruby-weak-hash
+    message: MD5 / SHA1 used.
+    severity: WARNING
+    languages: [ruby]
+    pattern-either:
+      - pattern: Digest::MD5.hexdigest(...)
+      - pattern: Digest::MD5.digest(...)
+      - pattern: Digest::SHA1.hexdigest(...)
+      - pattern: Digest::SHA1.digest(...)
+
+  # ---------------------------------------------------------------
+  # Mass assignment / unsafe params
+  # ---------------------------------------------------------------
+  - id: ruby-rails-permit-all
+    message: params.permit! allows any attribute to be mass-assigned.
+    severity: WARNING
+    languages: [ruby]
+    pattern: params.permit!
+
+  # ---------------------------------------------------------------
+  # XSS (raw HTML)
+  # ---------------------------------------------------------------
+  - id: ruby-erb-raw-user
+    message: raw() outputs user input without escaping. XSS.
+    severity: WARNING
+    languages: [ruby]
+    pattern-either:
+      - pattern: raw(params[$X])
+      - pattern: html_safe

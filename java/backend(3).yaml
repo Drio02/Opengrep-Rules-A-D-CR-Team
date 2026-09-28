@@ -1,0 +1,242 @@
+rules:
+- id: java-sqli-concat
+  languages:
+  - java
+  severity: ERROR
+  message: SQL construida con concat/String.format. Usa PreparedStatement + setString.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $STMT.executeQuery($A + $B)
+  - pattern: $STMT.execute($A + $B)
+  - pattern: $STMT.executeUpdate($A + $B)
+  - pattern: $CONN.prepareStatement($A + $B)
+  - pattern: $STMT.executeQuery(String.format(...))
+  - pattern: $STMT.executeUpdate(String.format(...))
+- id: java-sqli-jpa-nativequery
+  languages:
+  - java
+  severity: ERROR
+  message: createNativeQuery con concatenacion. Usa :param bindings.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $EM.createNativeQuery($A + $B)
+  - pattern: $EM.createQuery($A + $B)
+- id: java-command-injection
+  languages:
+  - java
+  severity: ERROR
+  message: Runtime.exec/ProcessBuilder con concat/String.format. Pasa argumentos como array sin shell.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: HIGH
+  pattern-either:
+  - pattern: Runtime.getRuntime().exec($A + $B)
+  - pattern: Runtime.getRuntime().exec(String.format(...))
+  - pattern: new ProcessBuilder($A + $B)
+  - pattern: new ProcessBuilder("sh", "-c", $X)
+  - pattern: new ProcessBuilder("bash", "-c", $X)
+- id: java-xxe-documentbuilder
+  languages:
+  - java
+  severity: ERROR
+  message: DocumentBuilderFactory sin disallow-doctype-decl / FEATURE_SECURE_PROCESSING. XXE por defecto.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: HIGH
+  patterns:
+  - pattern: DocumentBuilderFactory.newInstance()
+- id: java-xxe-saxparser
+  languages:
+  - java
+  severity: ERROR
+  message: SAXParserFactory sin desactivar DTD/entidades externas. XXE.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: HIGH
+  pattern: SAXParserFactory.newInstance()
+- id: java-xxe-xmlinputfactory
+  languages:
+  - java
+  severity: ERROR
+  message: XMLInputFactory (StAX) sin SUPPORT_DTD=false / IS_SUPPORTING_EXTERNAL_ENTITIES=false. XXE.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: HIGH
+  pattern-either:
+  - pattern: XMLInputFactory.newInstance()
+  - pattern: XMLInputFactory.newFactory()
+- id: java-xxe-transformer
+  languages:
+  - java
+  severity: WARNING
+  message: TransformerFactory sin restringir ACCESS_EXTERNAL_DTD/STYLESHEET. XXE / SSRF via XSLT.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: MEDIUM
+  pattern: TransformerFactory.newInstance()
+- id: java-unsafe-deserialization
+  languages:
+  - java
+  severity: ERROR
+  message: ObjectInputStream.readObject / XMLDecoder con datos externos = RCE (gadget chains).
+  metadata:
+    category: security
+    cwe: CWE-502
+    confidence: HIGH
+  pattern-either:
+  - pattern: new ObjectInputStream($X).readObject()
+  - pattern: $OIS.readObject()
+  - pattern: new XMLDecoder($X).readObject()
+  - pattern: SerializationUtils.deserialize($X)
+  - pattern: new Yaml().load($X)
+  - pattern: new Yaml().loadAs($X, $T)
+- id: java-path-traversal
+  languages:
+  - java
+  severity: WARNING
+  message: Path/File construido con entrada del usuario. Verifica canonicalizacion + prefix check.
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: new File($BASE + $USER)
+  - pattern: Paths.get($BASE + $USER)
+  - pattern: new FileInputStream($BASE + $USER)
+  - pattern: Files.readAllBytes(Paths.get($BASE + $USER))
+- id: java-ssrf
+  languages:
+  - java
+  severity: WARNING
+  message: HttpClient/URL con entrada del usuario. Whitelist host + bloqueo rangos privados/file://.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: new URL($A + $B)
+  - pattern: HttpClient.newHttpClient().send(HttpRequest.newBuilder(URI.create($A + $B)).build(), $BH)
+- id: java-scripting-eval
+  languages:
+  - java
+  severity: ERROR
+  message: ScriptEngine.eval con string dinamico = RCE en Java. Se abusa mucho de Nashorn.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern: $ENG.eval($X)
+- id: java-jwt-parse-no-verify
+  languages:
+  - java
+  severity: ERROR
+  message: jwt.parse() sin verifier o con alg 'none' permite falsificar tokens.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: Jwts.parser().parse($X)
+  - pattern: Jwts.parserBuilder().build().parse($X)
+  - pattern: JWT.decode($X)
+- id: java-tls-trust-all
+  languages:
+  - java
+  severity: ERROR
+  message: TrustManager que confia en todo. MITM trivial.
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: new X509TrustManager() { ... }
+  - pattern: HttpsURLConnection.setDefaultHostnameVerifier(new HostnameVerifier() { ... })
+- id: java-weak-random-security
+  languages:
+  - java
+  severity: WARNING
+  message: java.util.Random no es CS-PRNG. Usa SecureRandom para tokens.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: new Random()
+  - pattern: new java.util.Random()
+- id: java-weak-crypto
+  languages:
+  - java
+  severity: WARNING
+  message: MD5/SHA1/DES/ECB para passwords o cifrado sensible. Usa BCrypt/Argon2 y AES-GCM.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: MessageDigest.getInstance("MD5")
+  - pattern: MessageDigest.getInstance("SHA-1")
+  - pattern: Cipher.getInstance("DES")
+  - pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+  - pattern: Cipher.getInstance("AES")
+- id: java-password-equals
+  languages:
+  - java
+  severity: WARNING
+  message: Comparacion de password con .equals(). No es constant-time. Usa MessageDigest.isEqual.
+  metadata:
+    category: security
+    cwe: CWE-208
+    confidence: LOW
+  pattern-either:
+  - pattern: $PWD.equals($X)
+  - pattern: $X.equals($PWD)
+- id: java-log-user-input
+  languages:
+  - java
+  severity: WARNING
+  message: Logging con concatenacion de entrada del usuario. Riesgo Log4Shell (log4j vulnerable) o log injection.
+  metadata:
+    category: security
+    cwe: CWE-117
+    confidence: LOW
+  pattern-either:
+  - pattern: logger.info($A + $B)
+  - pattern: logger.error($A + $B)
+  - pattern: log.info($A + $B)
+- id: java-idor-candidate
+  languages:
+  - java
+  severity: WARNING
+  message: 'CANDIDATO IDOR: findById/getReferenceById. Verifica owner-check antes de responder.'
+  metadata:
+    category: security
+    cwe: CWE-639
+    confidence: LOW
+  pattern-either:
+  - pattern: $REPO.findById($ID)
+  - pattern: $REPO.getReferenceById($ID)
+  - pattern: $REPO.getOne($ID)
+  - pattern: $EM.find($T, $ID)
+- id: java-spring-cors-open
+  languages:
+  - java
+  severity: WARNING
+  message: '@CrossOrigin(origins="*") en endpoint con credenciales/auth. Revisa politica.'
+  metadata:
+    category: security
+    cwe: CWE-346
+    confidence: LOW
+  pattern-either:
+  - pattern: '@CrossOrigin(origins = "*")'
+  - pattern: '@CrossOrigin("*")'

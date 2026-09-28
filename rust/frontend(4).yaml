@@ -1,0 +1,95 @@
+rules:
+- id: rust-fe-xss-dangerous-html
+  languages:
+  - rust
+  severity: ERROR
+  message: Insercion de HTML sin escapar en framework WASM. Escapa el contenido o usa VNode/text-only.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+    framework: yew/leptos/dioxus
+  pattern-either:
+  - pattern: Html::from_html_unchecked(...)
+  - pattern: yew::virtual_dom::VNode::from_html_unchecked(...)
+  - pattern: $EL.set_inner_html($X)
+  - pattern: element.set_inner_html($X)
+- id: rust-fe-eval-in-wasm
+  languages:
+  - rust
+  severity: ERROR
+  message: eval() via wasm-bindgen desde datos dinamicos = XSS/RCE en el cliente.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: js_sys::eval($X)
+  - pattern: js_sys::Function::new_no_args($X)
+- id: rust-fe-window-open-dynamic
+  languages:
+  - rust
+  severity: WARNING
+  message: window.open/location con URL dinamica sin whitelist. Puede permitir open redirect.
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: LOW
+  pattern-either:
+  - pattern: window.location.set_href($X)
+  - pattern: $W.open_with_url($X)
+  - pattern: $W.open_with_url_and_target($X, $T)
+- id: rust-fe-localstorage-sensitive
+  languages:
+  - rust
+  severity: WARNING
+  message: 'Escribir tokens/credenciales en localStorage: robable por XSS. Usa cookie httpOnly.'
+  metadata:
+    category: security
+    cwe: CWE-922
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: $LS.set_item($K, $V)
+  - metavariable-regex:
+      metavariable: $K
+      regex: (?i)"?(token|jwt|password|secret|api_?key|auth)"?
+- id: rust-fe-fetch-with-credentials
+  languages:
+  - rust
+  severity: INFO
+  message: 'fetch/reqwest cliente con credentials=include hacia URL dinamica: potencial exfiltracion CSRF-like.'
+  metadata:
+    category: security
+    cwe: CWE-352
+    confidence: LOW
+  pattern-either:
+  - pattern: $OPTS.credentials(web_sys::RequestCredentials::Include)
+- id: rust-fe-console-log-sensitive
+  languages:
+  - rust
+  severity: INFO
+  message: console.log/web_sys::console con posibles secretos. En prod pierdes datos por DevTools/logs.
+  metadata:
+    category: security
+    cwe: CWE-532
+    confidence: LOW
+  pattern-either:
+  - pattern: web_sys::console::log_1($X)
+  - pattern: gloo::console::log!($X)
+- id: rust-fe-hardcoded-api-endpoint
+  languages:
+  - rust
+  severity: INFO
+  message: 'URL/token de API hardcodeado en el binario WASM: cualquiera lo extrae con wasm-decompile.'
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: LOW
+  patterns:
+  - pattern-either:
+    - pattern: 'const $N: &str = "...";'
+    - pattern: 'static $N: &str = "...";'
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i).*(API_URL|ADMIN_URL|BACKEND_URL|SECRET|TOKEN|API_?KEY).*

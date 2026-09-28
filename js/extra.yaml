@@ -1,0 +1,86 @@
+rules:
+- id: js-ssrf-cloud-metadata
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: Request a metadata cloud (169.254.169.254 / metadata.google.internal). Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: axios.get($URL)
+    - pattern: axios.post($URL)
+    - pattern: fetch($URL)
+    - pattern: http.get($URL, ...)
+    - pattern: request($URL, ...)
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: js-redos
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Regex con nested quantifiers. Cadena maliciosa causa DoS del event loop.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: new RegExp($PAT)
+    - pattern: new RegExp($PAT, $F)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: js-graphql-introspection-enabled
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Apollo/GraphQL con introspection/playground en produccion. Expone el schema entero.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: HIGH
+    context: graphql
+  pattern-either:
+  - pattern: 'new ApolloServer({..., introspection: true, ...})'
+  - pattern: 'new ApolloServer({..., playground: true, ...})'
+- id: js-jwt-alg-none-or-confusion
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: jwt.verify acepta 'none' o mezcla algoritmos HS/RS (key confusion). Firma falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  patterns:
+  - pattern: 'jwt.verify($T, $K, { algorithms: $ALGS, ... })'
+  - metavariable-regex:
+      metavariable: $ALGS
+      regex: (?i).*(none|HS\d+.*RS\d+|RS\d+.*HS\d+).*
+- id: js-backdoor-magic-string
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Comparacion contra string 'magico' de bypass. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: if ($X === $MAGIC) { ... }
+    - pattern: if ($X == $MAGIC) { ... }
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

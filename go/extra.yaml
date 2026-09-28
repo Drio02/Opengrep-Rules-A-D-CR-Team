@@ -1,0 +1,76 @@
+rules:
+- id: go-ssrf-cloud-metadata
+  languages:
+  - go
+  severity: ERROR
+  message: http.Get a endpoint de metadata cloud. Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: http.Get($URL)
+    - pattern: http.Post($URL, $CT, $B)
+    - pattern: http.NewRequest($M, $URL, $B)
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: go-redos
+  languages:
+  - go
+  severity: INFO
+  message: regexp compilado con nested quantifiers. Go's RE2 no es catastrofico como PCRE pero revisa.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: LOW
+    note: Go usa RE2 que es lineal; se marca INFO por hygiene, no por RCE
+  patterns:
+  - pattern-either:
+    - pattern: regexp.MustCompile($PAT)
+    - pattern: regexp.Compile($PAT)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: go-graphql-introspection
+  languages:
+  - go
+  severity: WARNING
+  message: handler GraphQL con Playground/GraphiQL habilitado. Expone schema.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: HIGH
+    context: graphql
+  pattern-either:
+  - pattern: playground.Handler($T, $E)
+  - pattern: handler.Playground($T, $E)
+- id: go-jwt-alg-none
+  languages:
+  - go
+  severity: ERROR
+  message: jwt-go acepta SigningMethodNone. Firma trivialmente falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: jwt.SigningMethodNone
+  - pattern: jwt.UnsafeAllowNoneSignatureType
+- id: go-backdoor-magic-string
+  languages:
+  - go
+  severity: WARNING
+  message: Comparacion contra string 'magico' de bypass. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern: $X == $MAGIC
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

@@ -1,0 +1,185 @@
+rules:
+  # ---------------------------------------------------------------
+  # Command injection via child_process
+  # ---------------------------------------------------------------
+  - id: js-child-process-exec-user
+    message: >
+      child_process.exec / execSync with a user-controlled string is
+      command injection. Use spawn with an array of args instead.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-78"
+    pattern-either:
+      - pattern: child_process.exec($CMD, ...)
+      - pattern: child_process.execSync($CMD, ...)
+      - pattern: exec($CMD, ...)
+      - pattern: execSync($CMD, ...)
+      - pattern: cp.exec($CMD, ...)
+      - pattern: cp.execSync($CMD, ...)
+
+  - id: js-spawn-shell-true
+    message: >
+      child_process.spawn with shell:true reintroduces command injection.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: "child_process.spawn(..., { ..., shell: true, ... })"
+      - pattern: "child_process.spawnSync(..., { ..., shell: true, ... })"
+      - pattern: "spawn(..., { ..., shell: true, ... })"
+
+  # ---------------------------------------------------------------
+  # eval / Function / VM
+  # ---------------------------------------------------------------
+  - id: js-eval-user-input
+    message: eval on user input is RCE.
+    severity: ERROR
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-95"
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: new Function($X)
+      - pattern: Function($X)
+
+  - id: js-vm-runInThisContext
+    message: >
+      vm.runInThisContext / vm.runInNewContext do NOT sandbox and can
+      escape via prototypes. Treat as eval.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: vm.runInThisContext(...)
+      - pattern: vm.runInNewContext(...)
+      - pattern: vm.runInContext(...)
+
+  # ---------------------------------------------------------------
+  # Path traversal
+  # ---------------------------------------------------------------
+  - id: js-fs-user-path
+    message: >
+      Filesystem call with a request-derived path. Missing containment
+      check with path.resolve + startsWith(root).
+    severity: WARNING
+    languages: [javascript, typescript]
+    metadata:
+      cwe: "CWE-22"
+    pattern-either:
+      - pattern: fs.readFile(req.$X.$Y, ...)
+      - pattern: fs.readFileSync(req.$X.$Y, ...)
+      - pattern: fs.createReadStream(req.$X.$Y)
+      - pattern: fs.writeFile(req.$X.$Y, ...)
+      - pattern: fs.writeFileSync(req.$X.$Y, ...)
+      - pattern: fs.unlink(req.$X.$Y, ...)
+      - pattern: res.sendFile(req.$X.$Y)
+
+  - id: js-path-join-user
+    message: >
+      path.join with user-controlled segment. '../..' still escapes;
+      you need path.resolve + startsWith(allowedRoot).
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: path.join(..., req.params.$X, ...)
+      - pattern: path.join(..., req.query.$X, ...)
+      - pattern: path.join(..., req.body.$X, ...)
+
+  # ---------------------------------------------------------------
+  # SSRF
+  # ---------------------------------------------------------------
+  - id: js-fetch-user-url
+    message: >
+      HTTP request built from user-controlled URL without host allowlist.
+      SSRF risk against internal services (169.254.169.254, localhost).
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: fetch(req.$X.$Y, ...)
+      - pattern: axios.get(req.$X.$Y, ...)
+      - pattern: axios.post(req.$X.$Y, ...)
+      - pattern: axios($CFG)
+      - pattern: http.get(req.$X.$Y, ...)
+      - pattern: https.get(req.$X.$Y, ...)
+      - pattern: request(req.$X.$Y, ...)
+
+  # ---------------------------------------------------------------
+  # Prototype pollution
+  # ---------------------------------------------------------------
+  - id: js-object-merge-user-input
+    message: >
+      Merging user JSON into an object without a deny-list for __proto__
+      allows prototype pollution.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: Object.assign($TARGET, req.body)
+      - pattern: _.merge($TARGET, req.body)
+      - pattern: _.defaultsDeep($TARGET, req.body)
+      - pattern: Object.assign({}, req.body)
+
+  - id: js-bracket-assign-user-key
+    message: >
+      Dynamic property write with a user-controlled key can set __proto__.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: $OBJ[req.$X.$Y] = $V
+      - pattern: $OBJ[req.body.$Y] = $V
+
+  # ---------------------------------------------------------------
+  # SQL / NoSQL injection
+  # ---------------------------------------------------------------
+  - id: js-sql-template-user
+    message: SQL built with template literal / concatenation and user input.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: $DB.query(`...${req.$X.$Y}...`, ...)
+      - pattern: $DB.query("..." + req.$X.$Y + ...)
+      - pattern: $CONN.execute(`...${req.$X.$Y}...`, ...)
+
+  - id: js-mongo-user-object
+    message: >
+      Mongo query built from req.body/req.query allows NoSQL injection
+      via operator objects ($ne, $gt, $where).
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: $COL.find(req.body)
+      - pattern: $COL.find(req.query)
+      - pattern: $COL.findOne(req.body)
+      - pattern: $COL.findOne(req.query)
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: js-node-serialize-unserialize
+    message: node-serialize.unserialize on user input = RCE.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: serialize.unserialize($X)
+      - pattern: require("node-serialize").unserialize($X)
+
+  # ---------------------------------------------------------------
+  # Insecure transport / crypto
+  # ---------------------------------------------------------------
+  - id: js-tls-reject-unauthorized-false
+    message: TLS certificate verification disabled.
+    severity: ERROR
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: "{ ..., rejectUnauthorized: false, ... }"
+      - pattern: 'process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0"'
+
+  # ---------------------------------------------------------------
+  # Express: unsafe response
+  # ---------------------------------------------------------------
+  - id: js-res-send-unescaped-user
+    message: >
+      HTML response containing raw request data without escaping. XSS risk.
+    severity: WARNING
+    languages: [javascript, typescript]
+    pattern-either:
+      - pattern: res.send(`<...>${req.$X.$Y}</...>`)
+      - pattern: res.send("<..." + req.$X.$Y + "...>")

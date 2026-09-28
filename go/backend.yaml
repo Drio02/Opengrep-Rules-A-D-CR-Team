@@ -1,0 +1,196 @@
+rules:
+- id: go-sqli-fmt-sprintf
+  languages:
+  - go
+  severity: ERROR
+  message: SQL construida con fmt.Sprintf/concat. Usa placeholders ($1, ?) y parametros.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $DB.Query(fmt.Sprintf(...))
+  - pattern: $DB.QueryRow(fmt.Sprintf(...))
+  - pattern: $DB.Exec(fmt.Sprintf(...))
+  - pattern: $DB.Query($A + $B)
+  - pattern: $DB.Exec($A + $B)
+- id: go-sqli-gorm-raw
+  languages:
+  - go
+  severity: ERROR
+  message: GORM Raw/Exec con Sprintf. Usa placeholders o el query builder.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $DB.Raw(fmt.Sprintf(...))
+  - pattern: $DB.Exec(fmt.Sprintf(...))
+  - pattern: $DB.Where(fmt.Sprintf(...))
+- id: go-command-injection
+  languages:
+  - go
+  severity: ERROR
+  message: exec.Command con shell + string dinamico. Pasa args como slice sin sh -c.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: HIGH
+  pattern-either:
+  - pattern: exec.Command("sh", "-c", $X)
+  - pattern: exec.Command("bash", "-c", $X)
+  - pattern: exec.Command("cmd", "/C", $X)
+  - pattern: exec.CommandContext($CTX, "sh", "-c", $X)
+  - pattern: exec.CommandContext($CTX, "bash", "-c", $X)
+- id: go-path-traversal
+  languages:
+  - go
+  severity: WARNING
+  message: Path con Sprintf/concat sobre entrada. Usa filepath.Clean + prefix check contra base.
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: os.Open(fmt.Sprintf(...))
+  - pattern: os.ReadFile(fmt.Sprintf(...))
+  - pattern: ioutil.ReadFile(fmt.Sprintf(...))
+  - pattern: os.Open(filepath.Join($BASE, $USER))
+  - pattern: http.ServeFile($W, $R, filepath.Join($BASE, $USER))
+- id: go-ssrf
+  languages:
+  - go
+  severity: WARNING
+  message: http.Get/Client.Get con URL construida. Whitelist host y bloquea rangos privados/link-local/file://.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: http.Get(fmt.Sprintf(...))
+  - pattern: http.Post(fmt.Sprintf(...), $CT, $B)
+  - pattern: http.NewRequest($M, fmt.Sprintf(...), $B)
+  - pattern: $C.Get(fmt.Sprintf(...))
+- id: go-tls-verification-disabled
+  languages:
+  - go
+  severity: ERROR
+  message: 'InsecureSkipVerify: true en TLS. MITM trivial.'
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: 'InsecureSkipVerify: true'
+  - pattern: 'tls.Config{InsecureSkipVerify: true}'
+- id: go-weak-hash
+  languages:
+  - go
+  severity: WARNING
+  message: MD5/SHA1 para passwords/tokens. Usa bcrypt/argon2/scrypt.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: md5.New()
+  - pattern: md5.Sum($X)
+  - pattern: sha1.New()
+  - pattern: sha1.Sum($X)
+- id: go-weak-random-for-security
+  languages:
+  - go
+  severity: WARNING
+  message: math/rand no es CS-PRNG. Para tokens/nonces usa crypto/rand.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: rand.Int()
+  - pattern: rand.Intn(...)
+  - pattern: rand.Uint32()
+  - pattern: rand.Uint64()
+  - pattern: rand.Read($X)
+- id: go-jwt-parse-no-verify
+  languages:
+  - go
+  severity: ERROR
+  message: ParseUnverified NO verifica la firma. Usa Parse con keyFunc que fija el algoritmo.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: jwt.ParseUnverified($X, $Y)
+  - pattern: jwt.ParseUnverified($X, $Y, $Z)
+- id: go-plaintext-password-compare
+  languages:
+  - go
+  severity: ERROR
+  message: Comparacion de contrasenia con == (texto plano y no constant-time). Usa bcrypt.CompareHashAndPassword.
+  metadata:
+    category: security
+    cwe: CWE-256
+    confidence: HIGH
+  pattern-either:
+  - pattern: $O.Password == $X
+  - pattern: $O.Password != $X
+- id: go-hardcoded-dsn
+  languages:
+  - go
+  severity: ERROR
+  message: DSN con credenciales hardcodeadas. Cargalas del entorno.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: HIGH
+  pattern-regex: (?i)(user|password)=\S+.*(password|user)=\S+
+- id: go-idor-candidate
+  languages:
+  - go
+  severity: WARNING
+  message: 'CANDIDATO IDOR (GORM/database/sql): lookup por id. Verifica owner-check antes de responder.'
+  metadata:
+    category: security
+    cwe: CWE-639
+    confidence: LOW
+  pattern-either:
+  - pattern: $DB.Take($X, "id = ?", $ID)
+  - pattern: $DB.First($X, $ID)
+  - pattern: $DB.Where("id = ?", $ID).$M($Y)
+  - pattern: $DB.Find($X, $ID)
+- id: go-xxe-standard
+  languages:
+  - go
+  severity: INFO
+  message: encoding/xml de Go NO resuelve entidades externas por defecto (seguro). Se marca INFO como recordatorio
+    si se asigna un mapa Entity personalizado.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: LOW
+  pattern: $DEC.Entity = $M
+- id: go-open-redirect
+  languages:
+  - go
+  severity: WARNING
+  message: http.Redirect con URL desde la request sin validar. Verifica whitelist de host.
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: LOW
+  pattern-either:
+  - pattern: http.Redirect($W, $R, $R.URL.Query().Get($K), $CODE)
+  - pattern: http.Redirect($W, $R, $R.FormValue($K), $CODE)
+- id: go-cors-wildcard-with-credentials
+  languages:
+  - go
+  severity: WARNING
+  message: CORS con Origin=* y credenciales. Configuracion inconsistente que suele indicar un fallo.
+  metadata:
+    category: security
+    cwe: CWE-346
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $W.Header().Set("Access-Control-Allow-Origin", "*")

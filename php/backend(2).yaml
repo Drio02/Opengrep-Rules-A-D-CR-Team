@@ -1,0 +1,232 @@
+rules:
+- id: php-sqli-concat
+  languages:
+  - php
+  severity: ERROR
+  message: SQL con concatenacion. Usa prepared statements (PDO::prepare + bindParam).
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: mysqli_query($C, $A . $B)
+  - pattern: mysql_query($A . $B)
+  - pattern: $PDO->query($A . $B)
+  - pattern: $PDO->exec($A . $B)
+  - pattern: $M->query($A . $B)
+- id: php-sqli-interpolation
+  languages:
+  - php
+  severity: ERROR
+  message: SQL con interpolacion "...$var...". Usa prepared statements.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - patterns:
+    - pattern-either:
+      - pattern: mysqli_query($C, $Q)
+      - pattern: $PDO->query($Q)
+      - pattern: $PDO->exec($Q)
+    - metavariable-regex:
+        metavariable: $Q
+        regex: '".*\$.*"'
+- id: php-command-injection
+  languages:
+  - php
+  severity: ERROR
+  message: exec/system/shell_exec/passthru/popen con string dinamico. Usa escapeshellarg + escapeshellcmd.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: HIGH
+  pattern-either:
+  - pattern: system($X . $Y)
+  - pattern: exec($X . $Y)
+  - pattern: shell_exec($X . $Y)
+  - pattern: passthru($X . $Y)
+  - pattern: popen($X . $Y, $M)
+  - pattern: proc_open($X . $Y, $D, $P)
+  - pattern: '`$X . $Y`'
+  - patterns:
+    - pattern-either:
+      - pattern: system($X)
+      - pattern: exec($X)
+      - pattern: shell_exec($X)
+      - pattern: passthru($X)
+    - metavariable-regex:
+        metavariable: $X
+        regex: '".*\$.*"'
+- id: php-file-inclusion
+  languages:
+  - php
+  severity: ERROR
+  message: include/require con path dinamico. LFI/RFI clasico -> RCE.
+  metadata:
+    category: security
+    cwe: CWE-98
+    confidence: HIGH
+  pattern-either:
+  - pattern: include($X . $Y)
+  - pattern: include_once($X . $Y)
+  - pattern: require($X . $Y)
+  - pattern: require_once($X . $Y)
+  - pattern: include $_GET[$K]
+  - pattern: include $_POST[$K]
+  - pattern: include $_REQUEST[$K]
+  - pattern: require $_GET[$K]
+  - pattern: require_once $_GET[$K]
+- id: php-path-traversal
+  languages:
+  - php
+  severity: WARNING
+  message: file_get_contents/fopen con path desde $_GET/$_POST. Usa realpath + comparacion con base.
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: file_get_contents($_GET[$K])
+  - pattern: file_get_contents($_POST[$K])
+  - pattern: file_get_contents($_REQUEST[$K])
+  - pattern: fopen($_GET[$K], $M)
+  - pattern: readfile($_GET[$K])
+  - pattern: file_get_contents($BASE . $_GET[$K])
+- id: php-ssrf
+  languages:
+  - php
+  severity: WARNING
+  message: curl/file_get_contents con URL desde entrada. Whitelist host y bloqueo de rangos privados.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: curl_setopt($CH, CURLOPT_URL, $_GET[$K])
+  - pattern: curl_setopt($CH, CURLOPT_URL, $_POST[$K])
+  - pattern: file_get_contents($_GET[$K])
+- id: php-unsafe-deserialization
+  languages:
+  - php
+  severity: ERROR
+  message: unserialize() con datos no confiables permite POP chain -> RCE.
+  metadata:
+    category: security
+    cwe: CWE-502
+    confidence: HIGH
+  pattern-either:
+  - pattern: unserialize($_GET[$K])
+  - pattern: unserialize($_POST[$K])
+  - pattern: unserialize($_COOKIE[$K])
+  - pattern: unserialize($_REQUEST[$K])
+  - pattern: unserialize(base64_decode($_GET[$K]))
+- id: php-eval
+  languages:
+  - php
+  severity: ERROR
+  message: eval/assert con string = RCE.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: eval($X)
+  - pattern: assert($X)
+  - pattern: create_function($A, $B)
+- id: php-dynamic-callable
+  languages:
+  - php
+  severity: ERROR
+  message: call_user_func/preg_replace /e con callable desde input -> RCE.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: call_user_func($_GET[$K], ...)
+  - pattern: call_user_func($_POST[$K], ...)
+  - pattern: call_user_func_array($_GET[$K], $A)
+- id: php-xxe
+  languages:
+  - php
+  severity: ERROR
+  message: simplexml_load_string/DOMDocument sin LIBXML_NONET. En PHP < 8 puede resolver entidades.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: simplexml_load_string($X)
+  - pattern: simplexml_load_file($X)
+  - pattern: DOMDocument::loadXML($X)
+  - pattern: $DOC->loadXML($X)
+  - pattern: $DOC->load($X)
+- id: php-tls-verification-disabled
+  languages:
+  - php
+  severity: ERROR
+  message: CURLOPT_SSL_VERIFYPEER=false. MITM trivial.
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: curl_setopt($CH, CURLOPT_SSL_VERIFYPEER, false)
+  - pattern: curl_setopt($CH, CURLOPT_SSL_VERIFYHOST, 0)
+- id: php-weak-hash-password
+  languages:
+  - php
+  severity: ERROR
+  message: MD5/SHA1 para password. Usa password_hash() con PASSWORD_BCRYPT o PASSWORD_ARGON2ID.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  pattern-either:
+  - pattern: md5($_POST[$K])
+  - pattern: md5($_GET[$K])
+  - pattern: sha1($_POST[$K])
+  - pattern: hash("md5", $X)
+  - pattern: hash("sha1", $X)
+- id: php-loose-password-compare
+  languages:
+  - php
+  severity: ERROR
+  message: Comparacion == con hash o password permite type juggling (0e... = 0 numeric). Usa === o hash_equals.
+  metadata:
+    category: security
+    cwe: CWE-697
+    confidence: HIGH
+  pattern-either:
+  - pattern: md5($X) == $Y
+  - pattern: sha1($X) == $Y
+  - pattern: $_GET[$K] == "..."
+  - pattern: $_POST[$K] == "..."
+- id: php-extract-from-request
+  languages:
+  - php
+  severity: ERROR
+  message: extract($_GET/$_POST) permite sobrescribir variables (register_globals-like). Bug clasico de CTF.
+  metadata:
+    category: security
+    cwe: CWE-915
+    confidence: HIGH
+  pattern-either:
+  - pattern: extract($_GET)
+  - pattern: extract($_POST)
+  - pattern: extract($_REQUEST)
+- id: php-hardcoded-secret
+  languages:
+  - php
+  severity: WARNING
+  message: Constante con pinta de secreto.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+  patterns:
+  - pattern: define($N, "...")
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i)"(SECRET|JWT|TOKEN|PASSWORD|API_?KEY|.*_SECRET|.*_KEY|.*_PASSWORD)"

@@ -1,0 +1,79 @@
+rules:
+- id: php-ssrf-cloud-metadata
+  languages:
+  - php
+  severity: ERROR
+  message: Request a metadata cloud. Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: file_get_contents($URL);
+    - pattern: curl_setopt($CH, CURLOPT_URL, $URL);
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: php-redos
+  languages:
+  - php
+  severity: WARNING
+  message: preg_match/preg_replace con nested quantifiers. DoS via input malicioso.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: preg_match($PAT, $S);
+    - pattern: preg_match_all($PAT, $S, $M);
+    - pattern: preg_replace($PAT, $R, $S);
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: php-graphql-introspection
+  languages:
+  - php
+  severity: WARNING
+  message: webonyx/graphql-php con debug/introspection habilitado en produccion.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: MEDIUM
+    context: graphql
+  pattern-either:
+  - pattern: GraphQL::executeQuery(...)->setErrorsHandler(...);
+  - pattern: DebugFlag::INCLUDE_DEBUG_MESSAGE
+- id: php-jwt-alg-none
+  languages:
+  - php
+  severity: ERROR
+  message: JWT::decode acepta 'none' como algoritmo. Firma falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  patterns:
+  - pattern: JWT::decode($T, $K, $ALGS);
+  - metavariable-regex:
+      metavariable: $ALGS
+      regex: (?i).*"none".*
+- id: php-backdoor-magic-string
+  languages:
+  - php
+  severity: WARNING
+  message: Comparacion contra string 'magico'. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: $X === $MAGIC
+    - pattern: $X == $MAGIC
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

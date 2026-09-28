@@ -1,0 +1,87 @@
+rules:
+- id: py-ssrf-cloud-metadata
+  languages:
+  - python
+  severity: ERROR
+  message: Request a endpoint de metadata cloud (169.254.169.254 / metadata.google.internal). Robo de credenciales
+    IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: requests.get($URL)
+    - pattern: requests.post($URL)
+    - pattern: urllib.request.urlopen($URL)
+    - pattern: httpx.get($URL)
+    - pattern: aiohttp.ClientSession().get($URL)
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: py-redos
+  languages:
+  - python
+  severity: WARNING
+  message: Regex con patron catastrofico (nested quantifiers). Cadena maliciosa causa DoS.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: re.compile($PAT)
+    - pattern: re.match($PAT, $S)
+    - pattern: re.search($PAT, $S)
+    - pattern: re.findall($PAT, $S)
+    - pattern: re.fullmatch($PAT, $S)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: py-graphql-introspection-enabled
+  languages:
+  - python
+  severity: WARNING
+  message: GraphQL con introspection/debug habilitado. En A&D expone el schema entero al atacante.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: HIGH
+    context: graphql
+  pattern-either:
+  - pattern: GraphQLView.as_view(..., graphiql=True, ...)
+  - pattern: strawberry.Schema(..., introspection=True, ...)
+  - pattern: ariadne.make_executable_schema(..., introspection=True, ...)
+- id: py-jwt-alg-none-or-confusion
+  languages:
+  - python
+  severity: ERROR
+  message: jwt.decode acepta 'none' como algoritmo o mezcla HS/RS (key confusion). Firma falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  patterns:
+  - pattern: jwt.decode($T, $K, algorithms=$ALGS, ...)
+  - metavariable-regex:
+      metavariable: $ALGS
+      regex: (?i).*(none|HS\d+.*RS\d+|RS\d+.*HS\d+).*
+- id: py-backdoor-magic-string
+  languages:
+  - python
+  severity: WARNING
+  message: Comparacion contra string 'magico' de bypass. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: 'if $X == $MAGIC: ...'
+    - pattern: 'if $MAGIC == $X: ...'
+    - pattern: 'if $X in [$MAGIC]: ...'
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

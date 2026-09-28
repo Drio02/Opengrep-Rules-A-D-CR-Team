@@ -1,0 +1,179 @@
+rules:
+  # ---------------------------------------------------------------
+  # Command injection via exec.Command with shell
+  # ---------------------------------------------------------------
+  - id: go-exec-command-shell
+    message: >
+      exec.Command("sh"/"bash", "-c", $USER) is command injection when
+      the user controls part of the string.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-78"
+    pattern-either:
+      - pattern: exec.Command("sh", "-c", $X)
+      - pattern: exec.Command("bash", "-c", $X)
+      - pattern: exec.CommandContext($_, "sh", "-c", $X)
+      - pattern: exec.CommandContext($_, "bash", "-c", $X)
+
+  - id: go-exec-command-user-arg
+    message: >
+      exec.Command with a request-derived string as the program name.
+    severity: WARNING
+    languages: [go]
+    pattern-either:
+      - pattern: exec.Command($REQ.FormValue(...), ...)
+      - pattern: exec.Command($REQ.URL.Query().Get(...), ...)
+
+  # ---------------------------------------------------------------
+  # Path traversal
+  # ---------------------------------------------------------------
+  - id: go-file-op-user-input
+    message: >
+      Filesystem call with request-derived path. Missing filepath.Clean +
+      strings.HasPrefix(cleaned, allowedRoot) check.
+    severity: WARNING
+    languages: [go]
+    metadata:
+      cwe: "CWE-22"
+    pattern-either:
+      - pattern: os.Open($R.URL.Query().Get(...))
+      - pattern: os.ReadFile($R.URL.Query().Get(...))
+      - pattern: ioutil.ReadFile($R.URL.Query().Get(...))
+      - pattern: os.Create($R.URL.Query().Get(...))
+      - pattern: http.ServeFile($W, $R, $R.URL.Path)
+      - pattern: os.Open($R.FormValue(...))
+      - pattern: os.ReadFile($R.FormValue(...))
+
+  - id: go-filepath-join-no-clean-check
+    message: >
+      filepath.Join with user input does NOT prevent traversal. Follow
+      with filepath.Clean and prefix check.
+    severity: WARNING
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: filepath.Join($ROOT, $R.URL.Query().Get(...))
+          - pattern: filepath.Join($ROOT, $R.FormValue(...))
+          - pattern: filepath.Join($ROOT, mux.Vars($R)[...])
+      - pattern-not-inside: |
+          $P := filepath.Join(...)
+          ...
+          strings.HasPrefix($P, $ROOT)
+
+  # ---------------------------------------------------------------
+  # SSRF
+  # ---------------------------------------------------------------
+  - id: go-http-user-url
+    message: >
+      HTTP client request with URL derived from request without host
+      allowlist. SSRF risk.
+    severity: WARNING
+    languages: [go]
+    pattern-either:
+      - pattern: http.Get($R.URL.Query().Get(...))
+      - pattern: http.Get($R.FormValue(...))
+      - pattern: http.Post($R.URL.Query().Get(...), ...)
+      - pattern: http.NewRequest($_, $R.URL.Query().Get(...), ...)
+
+  # ---------------------------------------------------------------
+  # SQL injection
+  # ---------------------------------------------------------------
+  - id: go-sql-fmt-sprintf
+    message: SQL query built via fmt.Sprintf with user input.
+    severity: ERROR
+    languages: [go]
+    metadata:
+      cwe: "CWE-89"
+    pattern-either:
+      - pattern: $DB.Query(fmt.Sprintf("...", $R.URL.Query().Get(...)))
+      - pattern: $DB.QueryRow(fmt.Sprintf("...", $R.FormValue(...)))
+      - pattern: $DB.Exec(fmt.Sprintf("...", $R.$X.$Y))
+      - pattern: $DB.Query("..." + $R.URL.Query().Get(...))
+
+  # ---------------------------------------------------------------
+  # Panics on network / parse failures
+  # ---------------------------------------------------------------
+  - id: go-log-fatal-in-handler
+    message: >
+      log.Fatal in a request handler terminates the whole server process.
+      Return an error instead.
+    severity: WARNING
+    languages: [go]
+    pattern-either:
+      - pattern: |
+          func $F($W http.ResponseWriter, $R *http.Request) {
+              ...
+              log.Fatal(...)
+              ...
+          }
+      - pattern: |
+          func $F($W http.ResponseWriter, $R *http.Request) {
+              ...
+              log.Fatalf(...)
+              ...
+          }
+
+  - id: go-panic-in-handler
+    message: >
+      panic() in a request handler crashes the goroutine (and the process
+      if no recover()). DoS on parse errors.
+    severity: WARNING
+    languages: [go]
+    patterns:
+      - pattern: |
+          func $F($W http.ResponseWriter, $R *http.Request) {
+              ...
+              panic(...)
+              ...
+          }
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: go-gob-decode-untrusted
+    message: >
+      encoding/gob decoded from network input allows arbitrary type
+      creation and DoS via nested types.
+    severity: INFO
+    languages: [go]
+    pattern-either:
+      - pattern: gob.NewDecoder(...).Decode(...)
+
+  # ---------------------------------------------------------------
+  # Insecure TLS
+  # ---------------------------------------------------------------
+  - id: go-tls-skip-verify
+    message: TLS certificate verification disabled.
+    severity: ERROR
+    languages: [go]
+    pattern: |
+      tls.Config{ ..., InsecureSkipVerify: true, ... }
+
+  # ---------------------------------------------------------------
+  # HTTP smuggling primitives: content-length without bounds
+  # ---------------------------------------------------------------
+  - id: go-content-length-no-bounds
+    message: Content-Length parsed without upper bound check.
+    severity: WARNING
+    languages: [go]
+    patterns:
+      - pattern-either:
+          - pattern: strconv.Atoi($R.Header.Get("Content-Length"))
+          - pattern: strconv.ParseInt($R.Header.Get("Content-Length"), ...)
+          - pattern: strconv.ParseUint($R.Header.Get("Content-Length"), ...)
+      - pattern-not-inside: |
+          if $N > $MAX { ... }
+
+  # ---------------------------------------------------------------
+  # Weak crypto
+  # ---------------------------------------------------------------
+  - id: go-md5-sha1
+    message: MD5/SHA1 used. Broken for integrity/passwords.
+    severity: WARNING
+    languages: [go]
+    pattern-either:
+      - pattern: md5.New()
+      - pattern: md5.Sum(...)
+      - pattern: sha1.New()
+      - pattern: sha1.Sum(...)

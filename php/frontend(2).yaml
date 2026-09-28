@@ -1,0 +1,54 @@
+rules:
+- id: phpfe-echo-user-input
+  languages:
+  - php
+  severity: ERROR
+  message: echo/print de $_GET/$_POST sin htmlspecialchars = XSS reflejado.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: echo $_GET[$K];
+  - pattern: echo $_POST[$K];
+  - pattern: echo $_REQUEST[$K];
+  - pattern: print $_GET[$K];
+  - pattern: print $_POST[$K];
+  - pattern: echo $_COOKIE[$K];
+- id: phpfe-echo-concat
+  languages:
+  - php
+  severity: WARNING
+  message: echo con concat conteniendo $_GET/$_POST sin htmlspecialchars = XSS.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: echo $A . $_GET[$K];
+  - pattern: echo $_GET[$K] . $A;
+  - pattern: echo $A . $_POST[$K];
+- id: phpfe-open-redirect
+  languages:
+  - php
+  severity: WARNING
+  message: 'Header Location: con URL desde entrada. Verifica whitelist de host.'
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: 'header("Location: " . $_GET[$K]);'
+  - pattern: 'header("Location: " . $_POST[$K]);'
+  - pattern: 'header("Location: " . $_REQUEST[$K]);'
+- id: phpfe-set-cookie-insecure
+  languages:
+  - php
+  severity: WARNING
+  message: setcookie sin flags secure/httponly. Robable via XSS y viaja en claro.
+  metadata:
+    category: security
+    cwe: CWE-1004
+    confidence: LOW
+  patterns:
+  - pattern: setcookie($N, $V);

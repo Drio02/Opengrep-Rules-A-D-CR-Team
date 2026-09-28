@@ -1,0 +1,48 @@
+rules:
+- id: gofe-text-template-in-http
+  languages:
+  - go
+  severity: ERROR
+  message: text/template NO escapa HTML. En un endpoint HTTP = XSS. Usa html/template.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: '"text/template"'
+- id: gofe-html-template-safe-cast
+  languages:
+  - go
+  severity: ERROR
+  message: template.HTML/JS/URL castea a tipo 'ya escapado', desactivando el auto-escape con dato dinamico.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: template.HTML($X)
+  - pattern: template.JS($X)
+  - pattern: template.URL($X)
+  - pattern: template.HTMLAttr($X)
+- id: gofe-fmt-fprintf-html
+  languages:
+  - go
+  severity: WARNING
+  message: 'fmt.Fprintf al ResponseWriter con dato dinamico y content-type HTML: XSS reflejado.'
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: LOW
+  pattern-either:
+  - pattern: fmt.Fprintf($W, "...", $R.URL.Query().Get($K))
+  - pattern: fmt.Fprintf($W, "...", $R.FormValue($K))
+- id: gofe-plain-io-write
+  languages:
+  - go
+  severity: INFO
+  message: io.WriteString al ResponseWriter con entrada del usuario. XSS potencial si Content-Type es HTML.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: LOW
+  pattern: io.WriteString($W, $R.URL.Query().Get($K))

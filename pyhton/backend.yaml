@@ -1,0 +1,240 @@
+rules:
+- id: py-sqli-concat-execute
+  languages:
+  - python
+  severity: ERROR
+  message: 'cursor.execute() con concatenacion / f-string / .format(). Usa parametros: cursor.execute(sql, (param,)).'
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $C.execute($X + $Y)
+  - pattern: $C.execute(f"...")
+  - pattern: $C.execute("...".format(...))
+  - pattern: $C.execute("..." % $X)
+  - pattern: $C.executemany(f"...", $Y)
+- id: py-sqli-sqlalchemy-text
+  languages:
+  - python
+  severity: ERROR
+  message: 'SQLAlchemy text() con f-string/format = SQLi. Usa :param y execute(text(...), {''param'': val}).'
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: text(f"...")
+  - pattern: sqlalchemy.text(f"...")
+  - pattern: text("...".format(...))
+  - pattern: text($X + $Y)
+- id: py-sqli-django-raw
+  languages:
+  - python
+  severity: ERROR
+  message: Django raw()/extra() con string dinamico. Usa params=[] o el ORM.
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - pattern: $M.objects.raw(f"...")
+  - pattern: $M.objects.raw("...".format(...))
+  - pattern: $M.objects.extra(where=[f"..."])
+- id: py-command-injection
+  languages:
+  - python
+  severity: ERROR
+  message: Ejecucion de comando con shell=True y string dinamico. Pasa una lista sin shell.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: HIGH
+  pattern-either:
+  - pattern: os.system(f"...")
+  - pattern: os.system($X + $Y)
+  - pattern: os.popen(f"...")
+  - pattern: subprocess.run(f"...", shell=True, ...)
+  - pattern: subprocess.Popen(f"...", shell=True, ...)
+  - pattern: subprocess.check_output(f"...", shell=True, ...)
+  - pattern: subprocess.call(f"...", shell=True, ...)
+- id: py-xxe-lxml
+  languages:
+  - python
+  severity: WARNING
+  message: Parseo lxml sin parser endurecido. Pasa XMLParser(resolve_entities=False, no_network=True, load_dtd=False).
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: lxml.etree.fromstring($X)
+    - pattern: lxml.etree.parse($X)
+    - pattern: lxml.etree.iterparse($X)
+    - pattern: etree.fromstring($X)
+    - pattern: etree.parse($X)
+  - pattern-not: etree.fromstring($X, parser=$P)
+  - pattern-not: etree.parse($X, parser=$P)
+  - pattern-not: lxml.etree.fromstring($X, parser=$P)
+  - pattern-not: lxml.etree.parse($X, parser=$P)
+- id: py-xxe-stdlib
+  languages:
+  - python
+  severity: WARNING
+  message: Parsers XML de la stdlib. Usa defusedxml.
+  metadata:
+    category: security
+    cwe: CWE-611
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: xml.etree.ElementTree.fromstring($X)
+  - pattern: xml.etree.ElementTree.parse($X)
+  - pattern: xml.dom.minidom.parseString($X)
+  - pattern: xml.dom.minidom.parse($X)
+  - pattern: xml.sax.parse($X, $Y)
+- id: py-unsafe-deserialization
+  languages:
+  - python
+  severity: ERROR
+  message: Deserializacion insegura (RCE con input no confiable).
+  metadata:
+    category: security
+    cwe: CWE-502
+    confidence: HIGH
+  pattern-either:
+  - pattern: pickle.loads($X)
+  - pattern: pickle.load($X)
+  - pattern: cPickle.loads($X)
+  - pattern: yaml.load($X)
+  - pattern: yaml.load($X, Loader=yaml.Loader)
+  - pattern: yaml.load($X, Loader=yaml.FullLoader)
+  - pattern: shelve.open($X)
+  - pattern: marshal.loads($X)
+- id: py-path-traversal
+  languages:
+  - python
+  severity: WARNING
+  message: Path construido con entrada del usuario. Valida con os.path.commonpath y whitelist.
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: open(f"...")
+  - pattern: open($X + $Y)
+  - pattern: open(os.path.join($BASE, $USER))
+  - pattern: send_file(os.path.join($BASE, $USER))
+  - pattern: send_from_directory($D, $USER)
+- id: py-ssrf
+  languages:
+  - python
+  severity: WARNING
+  message: HTTP client con URL dinamica. Whitelist de host y bloqueo de rangos privados/link-local/file://.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: requests.get(f"...")
+  - pattern: requests.post(f"...")
+  - pattern: requests.get($X + $Y)
+  - pattern: urllib.request.urlopen(f"...")
+  - pattern: urllib.request.urlopen($X + $Y)
+  - pattern: httpx.get(f"...")
+  - pattern: httpx.AsyncClient().get(f"...")
+- id: py-tls-verification-disabled
+  languages:
+  - python
+  severity: ERROR
+  message: verify=False en HTTPS. MITM trivial.
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: requests.get(..., verify=False, ...)
+  - pattern: requests.post(..., verify=False, ...)
+  - pattern: requests.put(..., verify=False, ...)
+  - pattern: requests.request(..., verify=False, ...)
+  - pattern: httpx.Client(verify=False)
+  - pattern: ssl._create_unverified_context()
+- id: py-weak-hash
+  languages:
+  - python
+  severity: WARNING
+  message: Hash MD5/SHA1 para contrasenias/tokens. Usa bcrypt/argon2/scrypt.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: hashlib.md5($X)
+  - pattern: hashlib.sha1($X)
+- id: py-jwt-no-verify
+  languages:
+  - python
+  severity: ERROR
+  message: jwt.decode sin verificacion de firma permite falsificar tokens.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: jwt.decode(..., verify=False, ...)
+  - pattern: 'jwt.decode(..., options={"verify_signature": False}, ...)'
+- id: py-hardcoded-secret
+  languages:
+  - python
+  severity: WARNING
+  message: Variable con pinta de secreto asignada a string literal.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+  patterns:
+  - pattern: $N = "..."
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i)^(SECRET|JWT|TOKEN|PASSWORD|API_?KEY|ACCESS_?KEY|.*_SECRET|.*_PASSWORD|.*_TOKEN|.*_KEY)$
+- id: py-idor-candidate
+  languages:
+  - python
+  severity: WARNING
+  message: 'CANDIDATO IDOR: lookup por id/pk. Verifica owner-check (model.user_id == current_user.id).'
+  metadata:
+    category: security
+    cwe: CWE-639
+    confidence: LOW
+  pattern-either:
+  - pattern: $M.query.get($ID)
+  - pattern: $M.query.get_or_404($ID)
+  - pattern: $M.objects.get(id=$ID)
+  - pattern: $M.objects.get(pk=$ID)
+  - pattern: get_object_or_404($M, id=$ID)
+  - pattern: get_object_or_404($M, pk=$ID)
+  - pattern: await $M.get($ID)
+- id: py-flask-debug
+  languages:
+  - python
+  severity: WARNING
+  message: Flask corriendo en debug=True expone consola Python interactiva -> RCE.
+  metadata:
+    category: security
+    cwe: CWE-489
+    confidence: HIGH
+  pattern-either:
+  - pattern: app.run(..., debug=True, ...)
+  - pattern: $APP.run(..., debug=True, ...)
+- id: py-eval-exec
+  languages:
+  - python
+  severity: ERROR
+  message: eval/exec con entrada dinamica = RCE.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: eval($X)
+  - pattern: exec($X)

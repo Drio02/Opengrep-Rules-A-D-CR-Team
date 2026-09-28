@@ -1,0 +1,75 @@
+rules:
+- id: rust-ssrf-cloud-metadata
+  languages:
+  - rust
+  severity: ERROR
+  message: reqwest a metadata cloud. Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: reqwest::get($URL)
+    - pattern: $C.get($URL)
+    - pattern: $C.post($URL)
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: rust-redos-fancy-regex
+  languages:
+  - rust
+  severity: WARNING
+  message: fancy_regex (soporta backreferences) con nested quantifiers = ReDoS. El crate `regex` normal es lineal.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern: fancy_regex::Regex::new($PAT)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: rust-graphql-introspection
+  languages:
+  - rust
+  severity: WARNING
+  message: async-graphql/juniper con introspection habilitado. Expone schema.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: MEDIUM
+    context: graphql
+  pattern-either:
+  - pattern: $X.disable_introspection()
+  - pattern: Schema::build($Q, $M, $S).finish()
+- id: rust-jwt-alg-none
+  languages:
+  - rust
+  severity: ERROR
+  message: Algorithm::None acepta cualquier token. Firma trivialmente falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: Algorithm::None
+  - pattern: jsonwebtoken::Algorithm::None
+- id: rust-backdoor-magic-string
+  languages:
+  - rust
+  severity: WARNING
+  message: Comparacion contra string 'magico'. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: $X == $MAGIC
+    - pattern: $X.eq($MAGIC)
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

@@ -1,0 +1,38 @@
+rules:
+- id: rubyfe-raw-html-safe
+  languages:
+  - ruby
+  severity: ERROR
+  message: raw() o .html_safe sobre variable dinamica desactiva escape en ERB => XSS.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: raw($X)
+  - pattern: $X.html_safe
+- id: rubyfe-erb-unescaped
+  languages:
+  - generic
+  severity: WARNING
+  message: <%== ...%> en ERB emite sin escapar. XSS si el contenido viene del usuario.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: MEDIUM
+  paths:
+    include:
+    - '*.erb'
+    - '*.html.erb'
+  pattern-regex: <%==\s
+- id: rubyfe-link-to-with-user-url
+  languages:
+  - ruby
+  severity: WARNING
+  message: 'link_to/redirect con URL desde params sin validar dominio: open redirect + posible javascript:.'
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: LOW
+  pattern-either:
+  - pattern: link_to $TXT, params[$K]

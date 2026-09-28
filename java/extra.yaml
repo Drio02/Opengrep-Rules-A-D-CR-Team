@@ -1,0 +1,78 @@
+rules:
+- id: java-ssrf-cloud-metadata
+  languages:
+  - java
+  severity: ERROR
+  message: HTTP request a metadata cloud. Robo de credenciales IAM.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: HIGH
+    context: cloud-ssrf
+  patterns:
+  - pattern-either:
+    - pattern: new URL($URL)
+    - pattern: URI.create($URL)
+    - pattern: HttpRequest.newBuilder(URI.create($URL))
+  - metavariable-regex:
+      metavariable: $URL
+      regex: (?i).*(169\.254\.169\.254|metadata\.google\.internal|metadata\.azure\.com|100\.100\.100\.200|169\.254\.170\.2).*
+- id: java-redos
+  languages:
+  - java
+  severity: WARNING
+  message: Pattern.compile con nested quantifiers. Cadena maliciosa causa DoS.
+  metadata:
+    category: security
+    cwe: CWE-1333
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: Pattern.compile($PAT)
+    - pattern: Pattern.compile($PAT, $FLAGS)
+    - pattern: $S.matches($PAT)
+  - metavariable-regex:
+      metavariable: $PAT
+      regex: .*(\([^)]*[+*]\)[+*]|\(\.\*\)\*|\(\.\+\)\+|\(\w\+\)\+|\(\[.*\]\+\)\+).*
+- id: java-graphql-introspection
+  languages:
+  - java
+  severity: WARNING
+  message: graphql-java sin bloquear introspeccion en produccion. Expone schema.
+  metadata:
+    category: security
+    cwe: CWE-538
+    confidence: MEDIUM
+    context: graphql
+  pattern: GraphQL.newGraphQL($SCHEMA).build()
+- id: java-jwt-none-algorithm
+  languages:
+  - java
+  severity: ERROR
+  message: Algorithm.none() en jwt.io / auth0. Firma trivialmente falsificable.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+  pattern-either:
+  - pattern: Algorithm.none()
+  - pattern: com.auth0.jwt.algorithms.Algorithm.none()
+  - pattern: SignatureAlgorithm.NONE
+  - pattern: io.jsonwebtoken.SignatureAlgorithm.NONE
+- id: java-backdoor-magic-string
+  languages:
+  - java
+  severity: WARNING
+  message: Comparacion .equals contra string 'magico'. En A&D suele ser backdoor plantada.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+    context: backdoor
+  patterns:
+  - pattern-either:
+    - pattern: $X.equals($MAGIC)
+    - pattern: $MAGIC.equals($X)
+  - metavariable-regex:
+      metavariable: $MAGIC
+      regex: .*(?i)^"?(admin_debug|debug_mode|dev_bypass|superuser_bypass|master_key|backdoor|test_admin|god_mode|magic_token|_debug_|_backdoor_|sudo_mode)"?$

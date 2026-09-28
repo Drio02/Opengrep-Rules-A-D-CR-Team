@@ -1,0 +1,185 @@
+rules:
+  # ---------------------------------------------------------------
+  # Command execution
+  # ---------------------------------------------------------------
+  - id: php-command-exec-user
+    message: >
+      Shell execution with user-controlled input. Command injection.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-78"
+    pattern-either:
+      - pattern: system($X, ...)
+      - pattern: exec($X, ...)
+      - pattern: shell_exec($X)
+      - pattern: passthru($X, ...)
+      - pattern: proc_open($X, ...)
+      - pattern: popen($X, ...)
+      - pattern: pcntl_exec($X, ...)
+      - pattern: "`$X`"
+
+  - id: php-backtick-with-user
+    message: Backtick operator executes shell commands.
+    severity: ERROR
+    languages: [php]
+    mode: taint
+
+    pattern-sources:
+      - pattern: $_GET[...]
+    pattern-sinks:
+      - pattern: '`$CMD`'
+
+  # ---------------------------------------------------------------
+  # eval / dynamic code
+  # ---------------------------------------------------------------
+  - id: php-eval-user-input
+    message: eval() with user input = RCE.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-95"
+    pattern-either:
+      - pattern: eval($X)
+      - pattern: assert($X)
+      - pattern: create_function(..., $X)
+
+  - id: php-preg-replace-e
+    message: preg_replace with /e modifier executes replacement as code.
+    severity: ERROR
+    languages: [php]
+    pattern: preg_replace("/.../.../e", ...)
+
+  # ---------------------------------------------------------------
+  # File inclusion (LFI/RFI)
+  # ---------------------------------------------------------------
+  - id: php-include-user-input
+    message: >
+      include/require with user-controlled path is Local (or Remote) File
+      Inclusion.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-98"
+    pattern-either:
+      - pattern: include $_GET[...]
+      - pattern: include $_POST[...]
+      - pattern: include $_REQUEST[...]
+      - pattern: include_once $_GET[...]
+      - pattern: require $_GET[...]
+      - pattern: require_once $_GET[...]
+
+  # ---------------------------------------------------------------
+  # Path traversal
+  # ---------------------------------------------------------------
+  - id: php-file-op-user-input
+    message: >
+      Filesystem call with user-controlled path. Missing realpath() +
+      strpos check against allowed root.
+    severity: WARNING
+    languages: [php]
+    metadata:
+      cwe: "CWE-22"
+    pattern-either:
+      - pattern: file_get_contents($_GET[...])
+      - pattern: file_get_contents($_POST[...])
+      - pattern: file_get_contents($_REQUEST[...])
+      - pattern: file_put_contents($_GET[...], ...)
+      - pattern: fopen($_GET[...], ...)
+      - pattern: readfile($_GET[...])
+      - pattern: unlink($_GET[...])
+      - pattern: move_uploaded_file(..., $_GET[...])
+      - pattern: move_uploaded_file(..., $_POST[...])
+
+  # ---------------------------------------------------------------
+  # SQL injection
+  # ---------------------------------------------------------------
+  - id: php-sql-concat-user
+    message: SQL query built by concatenation with user input.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-89"
+    pattern-either:
+      - pattern: mysqli_query($_, "..." . $_GET[...] . "...")
+      - pattern: mysqli_query($_, "..." . $_POST[...] . "...")
+      - pattern: $DB->query("..." . $_GET[...] . "...")
+      - pattern: mysql_query("..." . $_GET[...] . "...")
+      - pattern: $DB->exec("..." . $_GET[...] . "...")
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: php-unserialize-user-input
+    message: >
+      unserialize() on user input allows object injection → possible RCE
+      via magic methods (__wakeup/__destruct) and POP chains.
+    severity: ERROR
+    languages: [php]
+    metadata:
+      cwe: "CWE-502"
+    pattern-either:
+      - pattern: unserialize($_GET[...])
+      - pattern: unserialize($_POST[...])
+      - pattern: unserialize($_COOKIE[...])
+      - pattern: unserialize($_REQUEST[...])
+
+  # ---------------------------------------------------------------
+  # SSRF
+  # ---------------------------------------------------------------
+  - id: php-curl-user-url
+    message: cURL request to user-controlled URL without host allowlist.
+    severity: WARNING
+    languages: [php]
+    pattern-either:
+      - pattern: curl_setopt($_, CURLOPT_URL, $_GET[...])
+      - pattern: curl_setopt($_, CURLOPT_URL, $_POST[...])
+      - pattern: file_get_contents("http" . $_GET[...])
+
+  # ---------------------------------------------------------------
+  # XXE
+  # ---------------------------------------------------------------
+  - id: php-simplexml-user-load
+    message: >
+      XML parser without disabling external entities. XXE risk on
+      user-provided XML.
+    severity: WARNING
+    languages: [php]
+    pattern-either:
+      - pattern: simplexml_load_string($_GET[...], ...)
+      - pattern: simplexml_load_string($_POST[...], ...)
+      - pattern: DOMDocument::loadXML($_POST[...], ...)
+
+  # ---------------------------------------------------------------
+  # Weak crypto / auth
+  # ---------------------------------------------------------------
+  - id: php-md5-sha1-password
+    message: MD5 / SHA1 used. Use password_hash().
+    severity: WARNING
+    languages: [php]
+    pattern-either:
+      - pattern: md5($X)
+      - pattern: sha1($X)
+
+  - id: php-strcmp-loose-comparison
+    message: >
+      strcmp with array or == with string returns 0/NULL and passes weak
+      auth checks. Use hash_equals() or ===.
+    severity: WARNING
+    languages: [php]
+    pattern-either:
+      - pattern: strcmp($_GET[...], $X) == 0
+      - pattern: $_GET[...] == $X
+
+  # ---------------------------------------------------------------
+  # Header injection
+  # ---------------------------------------------------------------
+  - id: php-header-user-input
+    message: >
+      HTTP header set from user input allows response splitting / open
+      redirect.
+    severity: WARNING
+    languages: [php]
+    pattern-either:
+      - pattern: 'header("Location: " . $_GET[...])'
+      - pattern: header($_GET[...])

@@ -1,0 +1,177 @@
+rules:
+  # ---------------------------------------------------------------
+  # Panics on network / parsed input
+  # ---------------------------------------------------------------
+  - id: rust-unwrap-on-tcp
+    message: >
+      .unwrap() on TCP operations panics on network errors, killing the
+      process (or worse in a forked server). Handle the Result properly.
+    severity: ERROR
+    languages: [rust]
+    metadata:
+      cwe: "CWE-248"
+    pattern-either:
+      - pattern: TcpStream::connect(...).unwrap()
+      - pattern: TcpListener::bind(...).unwrap()
+      - pattern: $L.accept().unwrap()
+      - pattern: $S.set_nonblocking(...).unwrap()
+      - pattern: TcpStream::from_std(...).unwrap()
+      - pattern: $S.read(...).unwrap()
+      - pattern: $S.write(...).unwrap()
+      - pattern: $S.peer_addr().unwrap()
+
+  - id: rust-unwrap-on-parse
+    message: >
+      .unwrap() on parse / from_str / try_into panics on malformed input.
+      In network-facing code this is a DoS. Use ? or match.
+    severity: WARNING
+    languages: [rust]
+    pattern-either:
+      - pattern: $X.parse::<$T>().unwrap()
+      - pattern: $X.parse().unwrap()
+      - pattern: $T::from_str($X).unwrap()
+      - pattern: $X.try_into().unwrap()
+      - pattern: str::from_utf8($X).unwrap()
+      - pattern: String::from_utf8($X).unwrap()
+
+  - id: rust-expect-in-server-loop
+    message: >
+      .expect() panics on the current thread. In a per-connection server
+      this can kill the parent listener if not isolated by fork/thread.
+    severity: WARNING
+    languages: [rust]
+    pattern-either:
+      - pattern: $X.expect(...)
+
+  # ---------------------------------------------------------------
+  # Bind to all interfaces
+  # ---------------------------------------------------------------
+  - id: rust-bind-all-interfaces
+    message: >
+      Server binds to 0.0.0.0 or ::. Exposes the service on every interface
+      including public ones. Bind to 127.0.0.1 / ::1 unless intentional.
+    severity: WARNING
+    languages: [rust]
+    pattern-either:
+      - pattern: TcpListener::bind("0.0.0.0:...")
+      - pattern: TcpListener::bind("[::]:...")
+      - pattern: TcpListener::bind("::0:...")
+
+  # ---------------------------------------------------------------
+  # Path traversal via canonicalize without containment check
+  # ---------------------------------------------------------------
+  - id: rust-canonicalize-no-starts-with
+    message: >
+      Path::canonicalize called but result never checked with starts_with()
+      against an allowed root. Allows arbitrary file read/write when the
+      input comes from the network.
+    severity: ERROR
+    languages: [rust]
+    metadata:
+      cwe: "CWE-22"
+    patterns:
+      - pattern-either:
+          - pattern: |
+              let $P = Path::canonicalize($X)?;
+              ...
+              fs::read($P)
+          - pattern: |
+              let $P = Path::canonicalize($X)?;
+              ...
+              fs::read(&$P)
+          - pattern: |
+              let $P = $X.canonicalize()?;
+              ...
+              fs::read($P)
+      - pattern-not-inside: |
+          if !$P.starts_with(&$ROOT) {
+            ...
+          }
+      - pattern-not-inside: |
+          if $P.starts_with(&$ROOT){
+            ...
+          }
+
+  # ---------------------------------------------------------------
+  # SSRF: reqwest / hyper on user-controlled URL without allowlist
+  # ---------------------------------------------------------------
+  - id: rust-reqwest-user-url
+    message: >
+      HTTP client uses a URL derived from a caller-provided request
+      without host allowlist. SSRF risk against internal services.
+    severity: WARNING
+    languages: [rust]
+    pattern-either:
+      - pattern: reqwest::Client::new().get($URL)
+      - pattern: reqwest::Client::new().post($URL)
+      - pattern: reqwest::get($URL)
+      - pattern: $CLIENT.get(request.url())
+      - pattern: $CLIENT.post(request.url())
+
+  - id: rust-reqwest-forwards-all-headers
+    message: >
+      All caller headers forwarded verbatim to the outbound HTTP request.
+      When combined with a user-controlled URL this lets the caller set
+      Authorization/Cookie/Host on the target host.
+    severity: WARNING
+    languages: [rust]
+    patterns:
+      - pattern: |
+          for ($NAME, $VAL) in $REQ.headers().iter() {
+              $BUILDER = $BUILDER.header($NAME, $VAL);
+          }
+
+  # ---------------------------------------------------------------
+  # HTTP smuggling primitives: content-length without bounds
+  # ---------------------------------------------------------------
+  - id: rust-content-length-no-bounds
+    message: >
+      Content-Length parsed to usize/u64 without an upper bound check.
+      A huge value enables DoS or, if truncated to u32 downstream, HTTP
+      request smuggling via integer overflow.
+    severity: WARNING
+    languages: [rust]
+    pattern: $X.parse::<usize>()
+  # ---------------------------------------------------------------
+  # Unsafe blocks
+  # ---------------------------------------------------------------
+  - id: rust-libc-signal-sig-ign
+    message: >
+      SIGCHLD -> SIG_IGN auto-reaps children but breaks Command::status()
+      elsewhere (child processes cannot be waited). Confirm no crate does.
+    severity: INFO
+    languages: [rust]
+    pattern: |
+      unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN); }
+
+  - id: rust-unsafe-transmute
+    message: std::mem::transmute is memory unsafe. Verify layout invariants.
+    severity: WARNING
+    languages: [rust]
+    pattern: std::mem::transmute(...)
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: rust-serde-untrusted-formats
+    message: >
+      Deserializing bincode/rmp from network input can hit resource
+      exhaustion or gadget chains. Ensure a length limit is set.
+    severity: INFO
+    languages: [rust]
+    pattern-either:
+      - pattern: bincode::deserialize(...)
+      - pattern: rmp_serde::from_slice(...)
+      - pattern: rmp_serde::from_read(...)
+
+  # ---------------------------------------------------------------
+  # Weak crypto
+  # ---------------------------------------------------------------
+  - id: rust-weak-hash
+    message: MD5 or SHA1 used. Broken for integrity/passwords.
+    severity: WARNING
+    languages: [rust]
+    pattern-either:
+      - pattern: md5::compute(...)
+      - pattern: Md5::new()
+      - pattern: Sha1::new()

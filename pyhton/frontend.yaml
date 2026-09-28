@@ -1,0 +1,93 @@
+rules:
+- id: pyfe-flask-render-template-string
+  languages:
+  - python
+  severity: ERROR
+  message: render_template_string con f-string/concat = SSTI + XSS. Usa render_template con archivos fijos.
+  metadata:
+    category: security
+    cwe: CWE-94
+    confidence: HIGH
+    framework: flask
+  pattern-either:
+  - pattern: render_template_string(f"...")
+  - pattern: render_template_string($X + $Y)
+  - pattern: flask.render_template_string(f"...")
+- id: pyfe-markup-safe-user-input
+  languages:
+  - python
+  severity: WARNING
+  message: Markup()/mark_safe() sobre variable dinamica desactiva escape -> XSS.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Markup($X)
+  - pattern: flask.Markup($X)
+  - pattern: django.utils.safestring.mark_safe($X)
+  - pattern: mark_safe($X)
+- id: pyfe-open-redirect
+  languages:
+  - python
+  severity: WARNING
+  message: redirect() con URL desde el request sin validar. Verifica whitelist de dominios.
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: LOW
+  pattern-either:
+  - pattern: redirect(request.args.get(...))
+  - pattern: redirect(request.form.get(...))
+  - pattern: redirect(request.values.get(...))
+  - pattern: HttpResponseRedirect(request.GET.get(...))
+  - pattern: HttpResponseRedirect(request.POST.get(...))
+- id: pyfe-csrf-exempt
+  languages:
+  - python
+  severity: WARNING
+  message: '@csrf_exempt: la vista no valida CSRF. Verifica si es intencional.'
+  metadata:
+    category: security
+    cwe: CWE-352
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: '@csrf_exempt'
+  - pattern: '@django.views.decorators.csrf.csrf_exempt'
+- id: pyfe-insecure-cookie
+  languages:
+  - python
+  severity: WARNING
+  message: set_cookie sin httponly/secure. Robable via XSS y viaja en claro.
+  metadata:
+    category: security
+    cwe: CWE-1004
+    confidence: MEDIUM
+  patterns:
+  - pattern: $R.set_cookie(...)
+  - pattern-not: $R.set_cookie(..., httponly=True, ...)
+- id: pyfe-jinja-autoescape-false
+  languages:
+  - python
+  severity: ERROR
+  message: Environment de Jinja2 con autoescape desactivado -> XSS por defecto.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: jinja2.Environment(autoescape=False)
+  - pattern: Environment(autoescape=False)
+  - pattern: jinja2.Environment()
+- id: pyfe-ssti-render-with-input
+  languages:
+  - python
+  severity: WARNING
+  message: Template.render con dict que incluye entrada del usuario como TEMPLATE (no como variable).
+  metadata:
+    category: security
+    cwe: CWE-1336
+    confidence: LOW
+  pattern-either:
+  - pattern: Template($X).render(...)
+  - pattern: jinja2.Template($X).render(...)

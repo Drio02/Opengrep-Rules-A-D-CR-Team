@@ -1,0 +1,169 @@
+rules:
+- id: jsfe-xss-innerhtml
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: innerHTML/outerHTML con contenido dinamico = XSS. Usa textContent o sanitiza (DOMPurify).
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-either:
+  - pattern: $EL.innerHTML = $X
+  - pattern: $EL.outerHTML = $X
+  - pattern: $EL.insertAdjacentHTML($POS, $X)
+  - pattern: document.write($X)
+  - pattern: document.writeln($X)
+- id: jsfe-xss-react-dangerous
+  languages:
+  - generic
+  severity: ERROR
+  message: React dangerouslySetInnerHTML con string dinamico = XSS.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  paths:
+    include:
+    - '*.jsx'
+    - '*.tsx'
+    - '*.js'
+    - '*.ts'
+  pattern-regex: 'dangerouslySetInnerHTML\s*=\s*\{\{\s*__html:'
+- id: jsfe-xss-vue-v-html
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: Vue v-html con contenido dinamico = XSS. Usa {{ }} y sanitiza.
+  metadata:
+    category: security
+    cwe: CWE-79
+    confidence: HIGH
+  pattern-regex: v-html\s*=\s*["\'][^"\']+["\']
+- id: jsfe-eval-function
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: eval/new Function en el navegador con dato dinamico = XSS + RCE en el cliente.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: eval($X)
+  - pattern: new Function($X)
+- id: jsfe-open-redirect
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: location asignada desde parametro/hash sin validar dominio = open redirect (y XSS via javascript:).
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: window.location = $X
+  - pattern: window.location.href = $X
+  - pattern: location.href = $X
+  - pattern: window.open($X)
+  - pattern: window.open($X, ...)
+- id: jsfe-postmessage-star-origin
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: postMessage(msg, '*') sin restricir origin. Cualquier iframe/tab lo recibe.
+  metadata:
+    category: security
+    cwe: CWE-346
+    confidence: HIGH
+  pattern: $W.postMessage($M, "*")
+- id: jsfe-message-listener-no-origin
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: addEventListener('message') sin verificar event.origin. Ejecuta acciones para cualquiera.
+  metadata:
+    category: security
+    cwe: CWE-346
+    confidence: LOW
+  pattern-either:
+  - pattern: window.addEventListener("message", $F)
+  - pattern: addEventListener("message", $F)
+- id: jsfe-localstorage-sensitive
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: Escribir tokens/credenciales en localStorage = robable por XSS. Usa cookie httpOnly.
+  metadata:
+    category: security
+    cwe: CWE-922
+    confidence: LOW
+  patterns:
+  - pattern: localStorage.setItem($K, $V)
+  - metavariable-regex:
+      metavariable: $K
+      regex: (?i)"(token|jwt|password|secret|api_?key|auth|access_?token)"
+- id: jsfe-fetch-credentials-dynamic-url
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: 'fetch con credentials:''include'' hacia URL dinamica: exfiltracion de cookie via CSRF-like.'
+  metadata:
+    category: security
+    cwe: CWE-352
+    confidence: LOW
+  pattern-either:
+  - pattern: 'fetch($X, { credentials: "include" })'
+  - pattern: 'fetch($X, { ..., credentials: "include", ... })'
+- id: jsfe-hardcoded-secret
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: 'Secreto hardcodeado en codigo cliente: cualquiera lo ve en DevTools.'
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: const $N = "..."
+    - pattern: let $N = "..."
+    - pattern: var $N = "..."
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i)^(SECRET|API_?KEY|TOKEN|PASSWORD|.*_SECRET|.*_KEY|.*_TOKEN|.*_PASSWORD)$
+- id: jsfe-target-blank-no-noopener
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: '<a target="_blank"> sin rel="noopener": tabnabbing / window.opener leak.'
+  metadata:
+    category: security
+    cwe: CWE-1022
+    confidence: LOW
+  pattern-regex: target\s*=\s*["\']_blank["\'](?![^>]*rel\s*=\s*["\'][^"\']*noopener)
+- id: jsfe-console-log-sensitive
+  languages:
+  - javascript
+  - typescript
+  severity: INFO
+  message: console.log expuesto en produccion puede filtrar tokens/secretos.
+  metadata:
+    category: security
+    cwe: CWE-532
+    confidence: LOW
+  patterns:
+  - pattern: console.log($X)
+  - metavariable-regex:
+      metavariable: $X
+      regex: (?i).*(token|jwt|password|secret|api_?key|auth).*

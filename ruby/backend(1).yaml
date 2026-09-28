@@ -1,0 +1,212 @@
+rules:
+- id: ruby-sqli-string-interpolation
+  languages:
+  - ruby
+  severity: ERROR
+  message: 'SQL con interpolacion #{...}. Usa placeholders: where(''col = ?'', val) o hashes.'
+  metadata:
+    category: security
+    cwe: CWE-89
+    confidence: HIGH
+  pattern-either:
+  - patterns:
+    - pattern-either:
+      - pattern: $M.where($X)
+      - pattern: $M.find_by_sql($X)
+      - pattern: $C.execute($X)
+      - pattern: ActiveRecord::Base.connection.execute($X)
+    - metavariable-regex:
+        metavariable: $X
+        regex: .*#\{.*
+- id: ruby-command-injection
+  languages:
+  - ruby
+  severity: ERROR
+  message: Ejecucion de comando con interpolacion / backticks. Usa Open3.capture3 con array de args.
+  metadata:
+    category: security
+    cwe: CWE-78
+    confidence: HIGH
+  pattern-either:
+  - patterns:
+    - pattern-either:
+      - pattern: system($X)
+      - pattern: exec($X)
+      - pattern: IO.popen($X)
+      - pattern: Open3.capture3($X)
+      - pattern: Open3.capture2($X)
+    - metavariable-regex:
+        metavariable: $X
+        regex: .*#\{.*
+  - pattern: '`... #{$X} ...`'
+- id: ruby-path-traversal
+  languages:
+  - ruby
+  severity: WARNING
+  message: File.open/read/send_file con path interpolado a partir de params. Usa File.expand_path + startsWith(base).
+  metadata:
+    category: security
+    cwe: CWE-22
+    confidence: LOW
+  pattern-either:
+  - pattern: 'File.open("... #{$X} ...")'
+  - pattern: 'File.read("... #{$X} ...")'
+  - pattern: File.open(params[$K])
+  - pattern: File.read(params[$K])
+  - pattern: send_file(params[$K])
+  - pattern: 'send_file("... #{$X} ...")'
+- id: ruby-ssrf
+  languages:
+  - ruby
+  severity: WARNING
+  message: Net::HTTP/open-uri con URL de params. Whitelist host y bloqueo de rangos privados/link-local/file://.
+  metadata:
+    category: security
+    cwe: CWE-918
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: open(params[$K])
+  - pattern: URI.open(params[$K])
+  - pattern: Net::HTTP.get(URI(params[$K]))
+  - pattern: 'Net::HTTP.get_response(URI("... #{$X} ..."))'
+  - pattern: 'HTTP.get("... #{$X} ...")'
+- id: ruby-unsafe-deserialization
+  languages:
+  - ruby
+  severity: ERROR
+  message: Marshal.load/YAML.load/eval con input no confiable = RCE. Usa YAML.safe_load y JSON.
+  metadata:
+    category: security
+    cwe: CWE-502
+    confidence: HIGH
+  pattern-either:
+  - pattern: Marshal.load($X)
+  - pattern: YAML.load($X)
+  - pattern: YAML.load_file($X)
+  - pattern: Psych.load($X)
+- id: ruby-eval
+  languages:
+  - ruby
+  severity: ERROR
+  message: eval/instance_eval/class_eval con string dinamico = RCE.
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: HIGH
+  pattern-either:
+  - pattern: eval($X)
+  - pattern: instance_eval($X)
+  - pattern: class_eval($X)
+  - pattern: module_eval($X)
+- id: ruby-send-dynamic
+  languages:
+  - ruby
+  severity: WARNING
+  message: '.send con nombre de metodo desde params: acceso a metodos privados/RCE.'
+  metadata:
+    category: security
+    cwe: CWE-95
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $OBJ.send(params[$K])
+  - pattern: $OBJ.send(params[$K], ...)
+  - pattern: $OBJ.public_send(params[$K])
+- id: ruby-constantize-dynamic
+  languages:
+  - ruby
+  severity: ERROR
+  message: .constantize / .safe_constantize sobre params permite instanciar cualquier clase.
+  metadata:
+    category: security
+    cwe: CWE-470
+    confidence: HIGH
+  pattern-either:
+  - pattern: params[$K].constantize
+  - pattern: params[$K].safe_constantize
+- id: ruby-mass-assignment
+  languages:
+  - ruby
+  severity: WARNING
+  message: update/create con params directos sin strong parameters permite mass assignment (elevar rol, etc.).
+  metadata:
+    category: security
+    cwe: CWE-915
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: $M.update(params[$K])
+  - pattern: $M.update_attributes(params[$K])
+  - pattern: $M.new(params[$K])
+  - pattern: $M.create(params[$K])
+- id: ruby-open-redirect
+  languages:
+  - ruby
+  severity: WARNING
+  message: redirect_to params[...] sin allow_other_host y sin validacion permite redireccion externa.
+  metadata:
+    category: security
+    cwe: CWE-601
+    confidence: LOW
+  pattern-either:
+  - pattern: redirect_to params[$K]
+  - pattern: 'redirect_to params[$K], allow_other_host: true'
+- id: ruby-regex-multiline-anchor
+  languages:
+  - ruby
+  severity: WARNING
+  message: Regex con ^ y $ en Ruby matchea inicio/fin de LINEA, no de string. Bypass tipico con \n. Usa \A y \z.
+  metadata:
+    category: security
+    cwe: CWE-185
+    confidence: LOW
+  pattern-regex: validates.*format:\s*\{\s*with:\s*/\^
+- id: ruby-hardcoded-secret
+  languages:
+  - ruby
+  severity: WARNING
+  message: Constante con pinta de secreto asignada a string literal.
+  metadata:
+    category: security
+    cwe: CWE-798
+    confidence: MEDIUM
+  patterns:
+  - pattern: $N = "..."
+  - metavariable-regex:
+      metavariable: $N
+      regex: ^(SECRET|JWT|TOKEN|PASSWORD|API_?KEY|ACCESS_?KEY|.*_SECRET|.*_KEY|.*_TOKEN|.*_PASSWORD)$
+- id: ruby-weak-hash
+  languages:
+  - ruby
+  severity: WARNING
+  message: MD5/SHA1 para passwords/tokens. Usa BCrypt o Argon2.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Digest::MD5.hexdigest($X)
+  - pattern: Digest::SHA1.hexdigest($X)
+- id: ruby-idor-candidate
+  languages:
+  - ruby
+  severity: WARNING
+  message: 'CANDIDATO IDOR: lookup con params[:id]. Verifica owner-check (current_user.id) antes de responder.'
+  metadata:
+    category: security
+    cwe: CWE-639
+    confidence: LOW
+  pattern-either:
+  - pattern: $M.find(params[$K])
+  - pattern: '$M.find_by(id: params[$K])'
+  - pattern: $M.find_by_id(params[$K])
+- id: ruby-tls-verification-disabled
+  languages:
+  - ruby
+  severity: ERROR
+  message: OpenSSL VERIFY_NONE en HTTPS. MITM trivial.
+  metadata:
+    category: security
+    cwe: CWE-295
+    confidence: HIGH
+  pattern-either:
+  - pattern: OpenSSL::SSL::VERIFY_NONE
+  - pattern: $H.verify_mode = OpenSSL::SSL::VERIFY_NONE

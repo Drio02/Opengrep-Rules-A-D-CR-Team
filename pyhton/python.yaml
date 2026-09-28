@@ -1,0 +1,270 @@
+rules:
+  # ---------------------------------------------------------------
+  # Tar / Zip unsafe extraction
+  # ---------------------------------------------------------------
+  - id: python-tarfile-extractall-no-filter
+    message: >
+      tarfile.extractall without filter="data" (or explicit member validation)
+      allows path traversal, symlink attacks and hardlink attacks.
+      In Py 3.12+ pass filter="data". Otherwise validate members manually.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+      category: security
+    patterns:
+      - pattern-either:
+        - pattern: $TAR.extractall(...)
+        - pattern: tarfile.open(...).extractall(...)
+      - pattern-not: $TAR.extractall(..., filter="data", ...)
+      - pattern-not: $TAR.extractall(..., filter="tar", ...)
+      - pattern-not: $TAR.extractall(..., filter=$F, ...)
+
+  - id: python-zipfile-extractall-unsafe
+    message: >
+      zipfile.extractall may write outside the destination via crafted names.
+      Validate every member before extracting.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+    pattern: $Z.extractall(...)
+    pattern-not-inside: |
+      for $M in $Z.namelist():
+          ...
+
+  # ---------------------------------------------------------------
+  # Path traversal in user-controlled file paths
+  # ---------------------------------------------------------------
+  - id: python-path-join-user-input
+    message: >
+      User-controlled filename joined into a path without validation.
+      Use secure_filename() or verify with Path.is_relative_to(root).
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: os.path.join(..., request.$X.$Y, ...)
+              - pattern: Path(...).joinpath(request.$X.$Y)
+              - pattern: Path(...) / request.$X.$Y
+              - pattern: open(request.$X.$Y, ...)
+          - pattern-not-inside: |
+              $F = secure_filename(...)
+              ...
+      - patterns:
+          - pattern: $P.joinpath($NAME)
+          - pattern-inside: |
+              $NAME = $UPLOAD.filename
+              ...
+          - pattern-not-inside: |
+              $NAME = secure_filename(...)
+              ...
+
+  - id: python-canonicalize-no-containment
+    message: >
+      Path resolved with .resolve() but never checked with is_relative_to()
+      against an allowed root. Enables arbitrary file read/write.
+    severity: WARNING
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+    patterns:
+      - pattern: |
+          $P = Path(...).resolve()
+      - pattern-not-inside: |
+          $P = Path(...).resolve()
+          ...
+          $P.is_relative_to(...)
+      - pattern-not-inside: |
+          $P = Path(...).resolve()
+          ...
+          if not $P.is_relative_to(...):
+              ...
+
+  # ---------------------------------------------------------------
+  # Subprocess / command injection
+  # ---------------------------------------------------------------
+  - id: python-subprocess-shell-true
+    message: >
+      subprocess called with shell=True. If any argument is user-controlled,
+      this is a command injection sink.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-78"
+    pattern-either:
+      - pattern: subprocess.run(..., shell=True, ...)
+      - pattern: subprocess.Popen(..., shell=True, ...)
+      - pattern: subprocess.call(..., shell=True, ...)
+      - pattern: subprocess.check_output(..., shell=True, ...)
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+
+  - id: python-subprocess-user-filename
+    message: >
+      User upload's raw filename passed to subprocess. Sanitize with
+      secure_filename() and pass paths as absolute + validated.
+    severity: WARNING
+    languages: [python]
+    pattern-either:
+      - pattern: subprocess.$M([..., request.files[...].filename, ...], ...)
+      - pattern: subprocess.$M([..., $U.filename, ...], ...)
+
+  - id: python-typst-compile-no-root
+    message: >
+      `typst compile` invoked without --root. Typst allows read()/image()
+      relative to a project root. Without --root explicitly set, symlink
+      or path tricks may escape the intended directory.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: subprocess.run(["typst", "compile", ...], ...)
+          - pattern: subprocess.Popen(["typst", "compile", ...], ...)
+      - pattern-not: subprocess.$M(["typst", "compile", ..., "--root", ...], ...)
+
+  # ---------------------------------------------------------------
+  # SSRF / open URL fetch
+  # ---------------------------------------------------------------
+  - id: python-requests-user-url
+    message: >
+      HTTP request built from user-controlled URL without host allowlist.
+      Enables SSRF against internal services.
+    severity: WARNING
+    languages: [python]
+    pattern-either:
+      - pattern: requests.get(request.$X.$Y, ...)
+      - pattern: requests.post(request.$X.$Y, ...)
+      - pattern: requests.$M(request.$X.$Y, ...)
+      - pattern: urllib.request.urlopen(request.$X.$Y, ...)
+      - pattern: httpx.get(request.$X.$Y, ...)
+
+  # ---------------------------------------------------------------
+  # HTTP parsing: content-length without bounds
+  # ---------------------------------------------------------------
+  - id: python-content-length-no-bounds
+    message: >
+      Content-Length parsed to int with no upper bound. A huge value can
+      cause DoS or, on 32-bit conversions elsewhere, integer overflow that
+      enables HTTP smuggling.
+    severity: WARNING
+    languages: [python]
+    patterns:
+      - pattern-either:
+          - pattern: int($HDR["content-length"])
+          - pattern: int($HDR["Content-Length"])
+          - pattern: int($HDR.get("content-length"))
+          - pattern: int($HDR.get("Content-Length"))
+      - pattern-not-inside: |
+          if $X > $MAX:
+              ...
+      - pattern-not-inside: |
+          if $X < $MAX:
+              ...
+
+  # ---------------------------------------------------------------
+  # Deserialization
+  # ---------------------------------------------------------------
+  - id: python-pickle-load-untrusted
+    message: >
+      pickle.load / pickle.loads on data that may come from the network
+      is remote code execution.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-502"
+    pattern-either:
+      - pattern: pickle.load(...)
+      - pattern: pickle.loads(...)
+      - pattern: cPickle.load(...)
+      - pattern: cPickle.loads(...)
+      - pattern: dill.load(...)
+      - pattern: dill.loads(...)
+
+  - id: python-yaml-load-unsafe
+    message: >
+      yaml.load without SafeLoader executes arbitrary Python.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: yaml.load($X)
+      - pattern: yaml.load($X, Loader=yaml.Loader)
+      - pattern: yaml.load($X, Loader=yaml.FullLoader)
+
+  # ---------------------------------------------------------------
+  # Weak crypto / secrets
+  # ---------------------------------------------------------------
+  - id: python-hash-md5-sha1
+    message: MD5/SHA1 used. If for passwords or integrity, this is broken.
+    severity: WARNING
+    languages: [python]
+    pattern-either:
+      - pattern: hashlib.md5(...)
+      - pattern: hashlib.sha1(...)
+
+  - id: python-flask-debug-true
+    message: >
+      Flask debug mode enabled. In production this exposes the Werkzeug
+      console (RCE if reachable).
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $APP.run(..., debug=True, ...)
+      - pattern: app.run(..., debug=True, ...)
+
+  # ---------------------------------------------------------------
+  # SQL injection (basic)
+  # ---------------------------------------------------------------
+  - id: python-sql-fstring
+    message: SQL query built with f-string / concatenation.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: $CUR.execute(f"...{$X}...", ...)
+      - pattern: $CUR.execute("..." + $X + "...", ...)
+      - pattern: $CUR.execute("..." % $X, ...)
+
+  # ---------------------------------------------------------------
+  # Flask template render with user input (SSTI)
+  # ---------------------------------------------------------------
+  - id: python-flask-render-template-string-user
+    message: >
+      render_template_string with user input allows Jinja2 SSTI → RCE.
+    severity: ERROR
+    languages: [python]
+    pattern-either:
+      - pattern: render_template_string(request.$X.$Y)
+      - pattern: render_template_string(f"...{request.$X.$Y}...")
+      - pattern: render_template_string("..." + request.$X.$Y)
+  # Rules for simlink and hardlinks
+
+  - id: python-tarfile-linkname-unsafe
+    message: >
+      Tarinfo.linkname is used during archive extraction. Validate symlink and hardlink targets against the extraction directory before creating links.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+      category: security
+      technology:
+        - tarfile
+    pattern: $MEMBER.linkname
+
+  - id: python-subprocess-tar-extraction
+    message: >
+      Potentially untrusted TAR archive is extracted using a system command.
+      Validate archive members and link targets before extraction.
+    severity: ERROR
+    languages: [python]
+    metadata:
+      cwe: "CWE-22"
+      category: security
+
+    pattern-either:
+      - pattern: subprocess.run(["tar", $FLAGS, $ARCHIVE, "-C", $DEST], ...)
+      - pattern: subprocess.Popen(["tar", $FLAGS, $ARCHIVE, "-C", $DEST], ...)
+      - pattern: subprocess.call(["tar", $FLAGS, $ARCHIVE, "-C", $DEST], ...)
+      - pattern: subprocess.check_call(["tar", $FLAGS, $ARCHIVE, "-C", $DEST], ...)
