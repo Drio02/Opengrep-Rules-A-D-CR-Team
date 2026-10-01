@@ -1,0 +1,280 @@
+# =====================================================================
+# PHP - Attack & Defense logic bugs
+# =====================================================================
+rules:
+  - id: php-redirect-without-exit
+    languages: [php]
+    severity: ERROR
+    message: >
+      header("Location: ...") inside a check without exit/die afterwards
+      (Execution After Redirect). The browser follows the redirect, but curl
+      reads the rest of the page: the "protected" content is still sent.
+    metadata:
+      category: security
+      cwe: CWE-698
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-inside: |
+          if ($COND) { ... }
+      - pattern: header($LOC);
+      - metavariable-regex:
+          metavariable: $LOC
+          regex: (?i)^["']\s*location\s*:.*
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          exit;
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          exit();
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          exit($X);
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          die();
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          die($X);
+      - pattern-not-inside: |
+          header($LOC);
+          ...
+          return ...;
+
+  - id: php-cookie-based-authorization
+    languages: [php]
+    severity: ERROR
+    message: >
+      Authorization decided from a cookie value (admin/role/user_id). Cookies
+      are client-controlled: set "admin=1" and you are admin. Store identity
+      in $_SESSION or verify a signature.
+    metadata:
+      category: security
+      cwe: CWE-565
+      confidence: HIGH
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $_COOKIE[$K] == $V
+          - pattern: $_COOKIE[$K] === $V
+          - pattern: $V == $_COOKIE[$K]
+          - pattern: if ($_COOKIE[$K]) { ... }
+          - pattern: $ID = $_COOKIE[$K];
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^["'](is_?admin|admin|role|level|priv|user_?id|uid|userid|auth|logged_?in|loggedin|username|user)["']$
+
+  - id: php-weak-random-token
+    languages: [php]
+    severity: WARNING
+    message: >
+      rand()/mt_rand()/uniqid()/lcg_value()/str_shuffle are predictable
+      (mt_rand seed is recoverable with php_mt_seed; uniqid is a timestamp).
+      For tokens, reset codes, filenames use random_bytes()/random_int().
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: rand(...)
+      - pattern: mt_rand(...)
+      - pattern: uniqid(...)
+      - pattern: lcg_value()
+      - pattern: str_shuffle(...)
+      - pattern: array_rand(...)
+      - pattern: mt_srand(...)
+      - pattern: srand(...)
+
+  - id: php-hardcoded-jwt-key
+    languages: [php]
+    severity: ERROR
+    message: >
+      JWT key is a string literal. Every team has this key: mint tokens for
+      any user. Rotate it on your box (env var / random file at boot).
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: JWT::encode($P, "...", ...)
+      - pattern: JWT::decode($T, "...", ...)
+      - pattern: new Key("...", ...)
+      - pattern: JWT::decode($T, new Key("...", ...))
+
+  - id: php-timing-unsafe-secret-compare
+    languages: [php]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with ==, !=, === or !==. == is also
+      vulnerable to type juggling ("0e123" == "0e456", 0 == "abc" on PHP<8,
+      array == true). Use hash_equals() with string-cast operands.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+          - pattern: $A === $B
+          - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|sig|hmac|digest|api_?key|passw|otp|nonce|hash)\b.*
+      - pattern-not: $A === null
+      - pattern-not: $A == null
+      - pattern-not: $A !== null
+      - pattern-not: $A === ""
+      - pattern-not: $A === false
+
+  - id: php-in-array-loose
+    languages: [php]
+    severity: WARNING
+    message: >
+      in_array()/array_search() without strict=true uses loose comparison.
+      in_array("1abc", [1,2,3]) is true on PHP<8; in_array(0, ["admin"]) is
+      true on PHP<8. Classic allowlist bypass. Pass true as third argument.
+    metadata:
+      category: security
+      cwe: CWE-697
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: in_array($N, $H)
+      - pattern: array_search($N, $H)
+      - pattern: in_array($N, $H, false)
+
+  - id: php-preg-match-dollar-allows-newline
+    languages: [php]
+    severity: WARNING
+    message: >
+      Validation regex anchored with $ but without the D modifier: $ also
+      matches before a trailing "\n". "id\n; cat /flag" style payloads pass
+      /^[a-z]+$/. Use \z or add the D modifier.
+    metadata:
+      category: security
+      cwe: CWE-625
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern: preg_match($RE, ...)
+      - metavariable-regex:
+          metavariable: $RE
+          regex: ^["']([/#~!|]).*\$\1[a-zA-CE-Z]*["']$
+
+  - id: php-preg-match-unanchored-validation
+    languages: [php]
+    severity: INFO
+    message: >
+      Validation regex without ^ anchor: preg_match("/[a-z0-9]+/", $x) is
+      true for "abc;cat /flag". Anchor with ^...$ (and the D modifier).
+    metadata:
+      category: security
+      cwe: CWE-625
+      confidence: LOW
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern: if (!preg_match($RE, $X)) { ... }
+          - pattern: if (preg_match($RE, $X)) { ... }
+      - metavariable-regex:
+          metavariable: $RE
+          regex: ^["']([/#~!|])[^\^].*\1[a-zA-Z]*["']$
+
+  - id: php-laravel-mass-assignment
+    languages: [php]
+    severity: ERROR
+    message: >
+      Whole request written to an Eloquent model, or $guarded = [] disables
+      protection. Send is_admin=1&role=admin&user_id=<victim>. Use
+      $request->only([...]) / $request->validated().
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $M::create($request->all())
+      - pattern: $M::create(request()->all())
+      - pattern: $OBJ->fill($request->all())
+      - pattern: $OBJ->update($request->all())
+      - pattern: $M::create($_POST)
+      - pattern: $OBJ->fill($_POST)
+      - pattern: |
+          class $C extends $P {
+            ...
+            protected $guarded = [];
+            ...
+          }
+      - pattern: $M::unguard()
+
+  - id: php-phpinfo-or-debug-exposed
+    languages: [php]
+    severity: WARNING
+    message: >
+      phpinfo()/var_dump($_SERVER)/display_errors expose environment
+      variables (FLAG, DB passwords, APP_KEY) and file paths.
+    metadata:
+      category: security
+      cwe: CWE-200
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: phpinfo(...)
+      - pattern: var_dump($_SERVER)
+      - pattern: print_r($_SERVER)
+      - pattern: var_dump($_ENV)
+      - pattern: print_r($_ENV)
+      - pattern: var_dump(getenv())
+      - pattern: ini_set('display_errors', 1)
+      - pattern: ini_set('display_errors', '1')
+      - pattern: ini_set("display_errors", "On")
+
+  - id: php-session-fixation-user-id
+    languages: [php]
+    severity: ERROR
+    message: >
+      session_id() set from request input -> session fixation, or the session
+      identity is copied from user input -> impersonation.
+    metadata:
+      category: security
+      cwe: CWE-384
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: session_id($_GET[$K])
+      - pattern: session_id($_POST[$K])
+      - pattern: session_id($_COOKIE[$K])
+      - pattern: session_id($_REQUEST[$K])
+      - pattern: $_SESSION[$S] = $_GET[$K];
+      - pattern: $_SESSION[$S] = $_POST[$K];
+      - pattern: $_SESSION[$S] = $_REQUEST[$K];
+      - pattern: $_SESSION[$S] = $_COOKIE[$K];
+
+  - id: php-xxe-noent
+    languages: [php]
+    severity: ERROR
+    message: >
+      XML parsed with LIBXML_NOENT / LIBXML_DTDLOAD: external entities are
+      expanded -> read /flag, file:///etc/passwd or SSRF.
+    metadata:
+      category: security
+      cwe: CWE-611
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: simplexml_load_string($X, $C, <... LIBXML_NOENT ...>)
+      - pattern: simplexml_load_string($X, $C, <... LIBXML_DTDLOAD ...>)
+      - pattern: simplexml_load_file($X, $C, <... LIBXML_NOENT ...>)
+      - pattern: $DOM->loadXML($X, <... LIBXML_NOENT ...>)
+      - pattern: $DOM->loadXML($X, <... LIBXML_DTDLOAD ...>)
+      - pattern: $DOM->load($X, <... LIBXML_NOENT ...>)
+      - pattern: libxml_disable_entity_loader(false)
