@@ -1,0 +1,809 @@
+# =====================================================================
+# Python - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# The syntactic rules in backend.yaml / python.yaml only fire when the
+# dangerous call receives an f-string or a literal concatenation in the
+# SAME expression. Real services usually build the value in a variable
+# first:   q = "SELECT ... " + name ; cur.execute(q)
+# These taint rules follow user input (Flask, Django, FastAPI) through
+# assignments, string building and helper calls until it reaches a sink.
+#
+# Run with --taint-intrafile to also follow data across functions of the
+# same file.
+# =====================================================================
+rules:
+  # -------------------------------------------------------------------
+  # SQL injection
+  # -------------------------------------------------------------------
+  - id: py-taint-sqli
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL query (execute/raw/text). Use bound
+      parameters: cur.execute("... WHERE id = ?", (value,)).
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sanitizers:
+      - pattern: int(...)
+      - pattern: float(...)
+      - pattern: uuid.UUID(...)
+      - pattern: bool(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $CUR.execute($Q, ...)
+              - pattern: $CUR.executemany($Q, ...)
+              - pattern: $CUR.executescript($Q)
+              - pattern: $M.objects.raw($Q, ...)
+              - pattern: $M.objects.extra(..., where=$Q, ...)
+              - pattern: sqlalchemy.text($Q)
+              - pattern: text($Q)
+              - pattern: $DB.engine.execute($Q, ...)
+              - pattern: pandas.read_sql($Q, ...)
+          - focus-metavariable: $Q
+
+  # -------------------------------------------------------------------
+  # NoSQL injection (pymongo / motor)
+  # -------------------------------------------------------------------
+  - id: py-taint-nosqli
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User-controlled object used as a MongoDB filter. A JSON body like
+      {"password": {"$ne": null}} bypasses the check; "$where" runs JS.
+      Cast every field to str/int before building the query.
+    metadata:
+      category: security
+      cwe: CWE-943
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sanitizers:
+      - pattern: str(...)
+      - pattern: int(...)
+      - pattern: bson.ObjectId(...)
+      - pattern: ObjectId(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $COL.find($Q, ...)
+              - pattern: $COL.find_one($Q, ...)
+              - pattern: $COL.find_one_and_update($Q, ...)
+              - pattern: $COL.update_one($Q, ...)
+              - pattern: $COL.update_many($Q, ...)
+              - pattern: $COL.delete_one($Q, ...)
+              - pattern: $COL.delete_many($Q, ...)
+              - pattern: $COL.count_documents($Q, ...)
+              - pattern: $COL.aggregate($Q, ...)
+          - focus-metavariable: $Q
+
+  # -------------------------------------------------------------------
+  # OS command injection
+  # -------------------------------------------------------------------
+  - id: py-taint-command-injection
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User input reaches a shell command. Pass an argument list without
+      shell=True, or quote with shlex.quote().
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sanitizers:
+      - pattern: shlex.quote(...)
+      - pattern: pipes.quote(...)
+      - pattern: int(...)
+    pattern-sinks:
+      - pattern: os.system(...)
+      - pattern: os.popen(...)
+      - pattern: commands.getoutput(...)
+      - pattern: subprocess.getoutput(...)
+      - pattern: subprocess.getstatusoutput(...)
+      - patterns:
+          - pattern-either:
+              - pattern: subprocess.$F($CMD, ..., shell=True, ...)
+              - pattern: asyncio.create_subprocess_shell($CMD, ...)
+          - focus-metavariable: $CMD
+
+  # -------------------------------------------------------------------
+  # Code injection
+  # -------------------------------------------------------------------
+  - id: py-taint-code-injection
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: User input reaches eval/exec/compile. Direct RCE.
+    metadata:
+      category: security
+      cwe: CWE-95
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - pattern: eval(...)
+      - pattern: exec(...)
+      - pattern: compile(...)
+      - pattern: __import__(...)
+      - pattern: importlib.import_module(...)
+
+  # -------------------------------------------------------------------
+  # Path traversal / arbitrary file read-write
+  # -------------------------------------------------------------------
+  - id: py-taint-path-traversal
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User input reaches a filesystem path. "../" or an absolute path
+      (os.path.join ignores everything before it) escapes the base dir.
+      Use secure_filename()/os.path.basename() and check the resolved
+      path with Path.is_relative_to(base).
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sanitizers:
+      - pattern: secure_filename(...)
+      - pattern: werkzeug.utils.secure_filename(...)
+      - pattern: os.path.basename(...)
+      - pattern: int(...)
+      - pattern: safe_join(...)
+      - pattern: werkzeug.security.safe_join(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: open($P, ...)
+              - pattern: io.open($P, ...)
+              - pattern: send_file($P, ...)
+              - pattern: flask.send_file($P, ...)
+              - pattern: send_from_directory($D, $P, ...)
+              - pattern: FileResponse($P, ...)
+              - pattern: os.remove($P)
+              - pattern: os.unlink($P)
+              - pattern: os.rename($P, ...)
+              - pattern: os.listdir($P)
+              - pattern: shutil.rmtree($P, ...)
+              - pattern: shutil.copy($P, ...)
+              - pattern: shutil.copyfile($P, ...)
+              - pattern: shutil.move($P, ...)
+              - pattern: pathlib.Path($P)
+              - pattern: Path($P)
+              - pattern: $BASE / $P
+          - focus-metavariable: $P
+
+  # -------------------------------------------------------------------
+  # SSRF
+  # -------------------------------------------------------------------
+  - id: py-taint-ssrf
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >
+      User input controls the URL of a server-side HTTP request. Attackers
+      can reach internal services (other containers, flag stores, Redis,
+      cloud metadata). Allowlist scheme + host and resolve/block private IPs.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: requests.$M($URL, ...)
+              - pattern: requests.request($METHOD, $URL, ...)
+              - pattern: $SESSION.get($URL, ...)
+              - pattern: httpx.$M($URL, ...)
+              - pattern: urllib.request.urlopen($URL, ...)
+              - pattern: urllib.request.Request($URL, ...)
+              - pattern: urlopen($URL, ...)
+              - pattern: aiohttp.ClientSession().get($URL, ...)
+          - focus-metavariable: $URL
+
+  # -------------------------------------------------------------------
+  # Server-side template injection
+  # -------------------------------------------------------------------
+  - id: py-taint-ssti
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User input is used as template SOURCE (not as a variable). Jinja2/Mako
+      SSTI -> RCE ({{ cycler.__init__.__globals__.os.popen('id').read() }}).
+      Pass user data as render context instead.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: render_template_string($T, ...)
+              - pattern: flask.render_template_string($T, ...)
+              - pattern: jinja2.Template($T, ...)
+              - pattern: Template($T, ...)
+              - pattern: $ENV.from_string($T, ...)
+              - pattern: mako.template.Template($T, ...)
+              - pattern: django.template.Template($T, ...)
+          - focus-metavariable: $T
+
+  # -------------------------------------------------------------------
+  # Python format-string injection
+  # -------------------------------------------------------------------
+  - id: py-taint-format-string-injection
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >
+      User input is used as the FORMAT string of str.format(). Payloads like
+      "{user.__class__.__init__.__globals__[SECRET_KEY]}" leak globals,
+      config and flags. Never call .format() on user-controlled text.
+    metadata:
+      category: security
+      cwe: CWE-134
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FMT.format(...)
+              - pattern: $FMT.format_map(...)
+          - focus-metavariable: $FMT
+
+  # -------------------------------------------------------------------
+  # Insecure deserialization
+  # -------------------------------------------------------------------
+  - id: py-taint-deserialization
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      User input reaches an unsafe deserializer (pickle/yaml/jsonpickle/dill/
+      marshal). Crafted payload = RCE. Use json or yaml.safe_load.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: pickle.loads($D, ...)
+              - pattern: pickle.load($D, ...)
+              - pattern: _pickle.loads($D, ...)
+              - pattern: dill.loads($D, ...)
+              - pattern: jsonpickle.decode($D, ...)
+              - pattern: marshal.loads($D, ...)
+              - pattern: shelve.open($D, ...)
+              - pattern: yaml.load($D, ...)
+              - pattern: yaml.unsafe_load($D, ...)
+              - pattern: yaml.load_all($D, ...)
+              - pattern: numpy.load($D, ..., allow_pickle=True, ...)
+              - pattern: torch.load($D, ...)
+          - pattern-not: yaml.load($D, Loader=yaml.SafeLoader, ...)
+          - pattern-not: yaml.load($D, Loader=SafeLoader, ...)
+          - pattern-not: yaml.load($D, Loader=yaml.CSafeLoader, ...)
+          - focus-metavariable: $D
+
+  # -------------------------------------------------------------------
+  # Open redirect
+  # -------------------------------------------------------------------
+  - id: py-taint-open-redirect
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >
+      User input controls a redirect target. Allow only relative paths
+      (startswith("/") and not "//") or an allowlisted host.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: redirect($U, ...)
+              - pattern: flask.redirect($U, ...)
+              - pattern: HttpResponseRedirect($U, ...)
+              - pattern: RedirectResponse($U, ...)
+          - focus-metavariable: $U
+
+  # -------------------------------------------------------------------
+  # Regex injection / ReDoS
+  # -------------------------------------------------------------------
+  - id: py-taint-regex-injection
+    mode: taint
+    languages: [python]
+    severity: WARNING
+    message: >
+      User input is compiled as a regular expression. Enables ReDoS (service
+      goes down = SLA loss) and oracle attacks (".*" matches every secret).
+      Escape with re.escape().
+    metadata:
+      category: security
+      cwe: CWE-1333
+      confidence: MEDIUM
+      ad-impact: dos
+    pattern-sources:
+      - pattern-either:
+          - pattern: flask.request.$ATTR
+          - pattern: request.args
+          - pattern: request.form
+          - pattern: request.values
+          - pattern: request.json
+          - pattern: request.data
+          - pattern: request.cookies
+          - pattern: request.headers
+          - pattern: request.files
+          - pattern: request.get_json(...)
+          - pattern: request.get_data(...)
+          - pattern: request.GET
+          - pattern: request.POST
+          - pattern: request.COOKIES
+          - pattern: request.body
+          - pattern: request.META
+          - pattern: request.query_params
+          - pattern: request.path_params
+          - pattern: await request.json()
+          - pattern: await request.form()
+          - pattern: await request.body()
+      # Flask / FastAPI path and query parameters bound as handler arguments
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+      - patterns:
+          - pattern-inside: |
+              @$APP.$ROUTE(...)
+              async def $FUNC(..., $PARAM, ...):
+                  ...
+          - metavariable-regex:
+              metavariable: $ROUTE
+              regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - pattern: $PARAM
+    pattern-sanitizers:
+      - pattern: re.escape(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: re.compile($R, ...)
+              - pattern: re.match($R, ...)
+              - pattern: re.search($R, ...)
+              - pattern: re.fullmatch($R, ...)
+              - pattern: re.findall($R, ...)
+              - pattern: re.sub($R, ...)
+          - focus-metavariable: $R
