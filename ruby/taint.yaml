@@ -1,0 +1,434 @@
+# =====================================================================
+# Ruby (Rails / Sinatra / Rack) - taint mode (dataflow) rules
+# =====================================================================
+rules:
+  - id: ruby-taint-sqli
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL fragment (where/order/select/pluck/joins/
+      find_by_sql/execute). Use hash conditions or placeholders:
+      where("name = ?", name). ORDER BY needs an allowlist.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sanitizers:
+      - pattern: $X.to_i
+      - pattern: $X.to_f
+      - pattern: Integer(...)
+      - pattern: Float(...)
+      - pattern: $CONN.quote(...)
+      - pattern: ActiveRecord::Base.sanitize_sql(...)
+      - pattern: sanitize_sql_array(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $M.where($Q, ...)
+              - pattern: $M.where.not($Q, ...)
+              - pattern: $M.order($Q, ...)
+              - pattern: $M.reorder($Q, ...)
+              - pattern: $M.select($Q, ...)
+              - pattern: $M.pluck($Q, ...)
+              - pattern: $M.group($Q, ...)
+              - pattern: $M.having($Q, ...)
+              - pattern: $M.joins($Q, ...)
+              - pattern: $M.from($Q, ...)
+              - pattern: $M.find_by_sql($Q, ...)
+              - pattern: $M.count_by_sql($Q, ...)
+              - pattern: $M.exists?($Q)
+              - pattern: $M.calculate($OP, $Q)
+              - pattern: $CONN.execute($Q, ...)
+              - pattern: $CONN.exec($Q, ...)
+              - pattern: $CONN.exec_query($Q, ...)
+              - pattern: $CONN.select_all($Q, ...)
+              - pattern: $CONN.select_value($Q, ...)
+              - pattern: $CONN.query($Q, ...)
+              - pattern: $DB.fetch($Q, ...)
+              - pattern: $DB[$Q]
+          # hash / array conditions are parameterized
+          - pattern-not: '$M.$F(..., $K: $V, ...)'
+          - pattern-not: '$M.$F(..., $K => $V, ...)'
+          - pattern-not: $M.$F([...])
+          - focus-metavariable: $Q
+
+  - id: ruby-taint-command-injection
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input reaches a shell (system/exec/backticks/%x/IO.popen/Open3/
+      Kernel#open with "|"). Pass the command as separate arguments
+      (system("ping", "-c", "1", host)) or use Shellwords.escape.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sanitizers:
+      - pattern: Shellwords.escape(...)
+      - pattern: Shellwords.shellescape(...)
+      - pattern: $X.shellescape
+      - pattern: $X.to_i
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: system($C)
+              - pattern: exec($C)
+              - pattern: spawn($C)
+              - pattern: Kernel.system($C)
+              - pattern: Kernel.exec($C)
+              - pattern: IO.popen($C, ...)
+              - pattern: Open3.capture2($C, ...)
+              - pattern: Open3.capture2e($C, ...)
+              - pattern: Open3.capture3($C, ...)
+              - pattern: Open3.popen3($C, ...)
+              - pattern: Open3.popen2($C, ...)
+              - pattern: Open3.popen2e($C, ...)
+              - pattern: PTY.spawn($C, ...)
+              - pattern: open($C, ...)
+              - pattern: Kernel.open($C, ...)
+          - focus-metavariable: $C
+      - pattern: |
+          `...`
+      - pattern: |
+          %x(...)
+
+  - id: ruby-taint-code-injection
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input reaches eval / instance_eval / send / constantize /
+      const_get. ?method=system&arg=id style RCE, or instantiation of
+      arbitrary classes. Allowlist the method/class names.
+    metadata:
+      category: security
+      cwe: CWE-95
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($X, ...)
+              - pattern: instance_eval($X, ...)
+              - pattern: $O.instance_eval($X, ...)
+              - pattern: $O.class_eval($X, ...)
+              - pattern: $O.module_eval($X, ...)
+              - pattern: $O.send($X, ...)
+              - pattern: $O.__send__($X, ...)
+              - pattern: $O.public_send($X, ...)
+              - pattern: $O.method($X)
+              - pattern: $O.instance_variable_get($X)
+              - pattern: $O.instance_variable_set($X, ...)
+              - pattern: $X.constantize
+              - pattern: $X.safe_constantize
+              - pattern: Object.const_get($X, ...)
+              - pattern: Kernel.const_get($X, ...)
+          - focus-metavariable: $X
+
+  - id: ruby-taint-path-traversal
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input reaches a file path (File.read/open, send_file, render
+      file:). "../../flag" escapes the directory. Use File.basename and
+      check File.expand_path(path).start_with?(base + "/").
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sanitizers:
+      - pattern: File.basename(...)
+      - pattern: $X.to_i
+      - pattern: ActiveStorage::Filename.new(...).sanitized
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: File.$FN($P, ...)
+              - pattern: IO.$FN($P, ...)
+              - pattern: FileUtils.$FN($P, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(open|read|readlines|binread|write|binwrite|new|delete|unlink|foreach|readlink|rename|copy|cp|mv|rm|rm_rf|rm_r|chmod|symlink|link)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: send_file($P, ...)
+              - pattern: Pathname.new($P)
+              - pattern: Dir.glob($P, ...)
+              - pattern: Dir.entries($P)
+              - pattern: 'render(..., file: $P, ...)'
+              - pattern: 'render(..., template: $P, ...)'
+              - pattern: 'render(..., partial: $P, ...)'
+          - focus-metavariable: $P
+
+  - id: ruby-taint-ssrf
+    mode: taint
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      User input controls the URL of a server-side request (Net::HTTP,
+      URI.open, HTTParty, Faraday, RestClient). URI.open also executes
+      "|cmd" on old Rubies. Allowlist scheme and host.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Net::HTTP.get($U, ...)
+              - pattern: Net::HTTP.get_response($U, ...)
+              - pattern: Net::HTTP.post($U, ...)
+              - pattern: Net::HTTP.post_form($U, ...)
+              - pattern: Net::HTTP.start($U, ...)
+              - pattern: Net::HTTP.new($U, ...)
+              - pattern: URI.open($U, ...)
+              - pattern: URI($U)
+              - pattern: URI.parse($U)
+              - pattern: HTTParty.$M($U, ...)
+              - pattern: Faraday.$M($U, ...)
+              - pattern: Faraday.new($U, ...)
+              - pattern: RestClient.$M($U, ...)
+              - pattern: Excon.$M($U, ...)
+              - pattern: HTTP.get($U, ...)
+          - focus-metavariable: $U
+
+  - id: ruby-taint-deserialization
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input reaches Marshal.load / YAML.load (Psych < 4) /
+      YAML.unsafe_load / Oj.load / JSON.load. Gadget chains (Gem::Installer,
+      ERB) -> RCE. Use JSON.parse or YAML.safe_load.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Marshal.load($D, ...)
+              - pattern: Marshal.restore($D, ...)
+              - pattern: YAML.load($D, ...)
+              - pattern: YAML.unsafe_load($D, ...)
+              - pattern: YAML.load_documents($D, ...)
+              - pattern: Psych.load($D, ...)
+              - pattern: Psych.unsafe_load($D, ...)
+              - pattern: Oj.load($D, ...)
+              - pattern: Oj.object_load($D, ...)
+              - pattern: JSON.load($D, ...)
+              - pattern: 'JSON.parse($D, ..., create_additions: true, ...)'
+          - focus-metavariable: $D
+
+  - id: ruby-taint-ssti
+    mode: taint
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      User input used as template SOURCE (ERB.new / render inline: / Haml /
+      Slim / Tilt). <%= `id` %> -> RCE. Render fixed templates with user
+      data as locals.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: ERB.new($T, ...)
+              - pattern: Erubi::Engine.new($T, ...)
+              - pattern: Haml::Engine.new($T, ...)
+              - pattern: Haml::Template.new(...) { $T }
+              - pattern: Slim::Template.new(...) { $T }
+              - pattern: Tilt::ERBTemplate.new(...) { $T }
+              - pattern: 'render(..., inline: $T, ...)'
+              - pattern: erb($T, ...)
+              - pattern: haml($T, ...)
+              - pattern: slim($T, ...)
+          - pattern-not: erb(:$SYM, ...)
+          - pattern-not: haml(:$SYM, ...)
+          - pattern-not: slim(:$SYM, ...)
+          - focus-metavariable: $T
+
+  - id: ruby-taint-xss
+    mode: taint
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      User input marked as safe HTML (raw / html_safe / render html: /
+      content_tag with raw). Disables Rails auto-escaping -> XSS.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sanitizers:
+      - pattern: sanitize(...)
+      - pattern: ERB::Util.html_escape(...)
+      - pattern: h(...)
+      - pattern: CGI.escapeHTML(...)
+      - pattern: Rack::Utils.escape_html(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: raw($X)
+              - pattern: $X.html_safe
+              - pattern: 'render(..., html: $X, ...)'
+              - pattern: 'render(..., body: $X, ...)'
+          - focus-metavariable: $X
+
+  - id: ruby-taint-open-redirect
+    mode: taint
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      User input controls a redirect target. In Rails 7 pass
+      allow_other_host: false; otherwise allow only relative paths.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - pattern: params
+      - pattern: request.params
+      - pattern: request.body
+      - pattern: request.raw_post
+      - pattern: request.query_string
+      - pattern: request.headers
+      - pattern: request.env
+      - pattern: request.cookies
+      - pattern: request.path_info
+      - pattern: request.url
+      - pattern: request.referer
+      - pattern: request.user_agent
+      - pattern: cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: redirect_to($U, ...)
+              - pattern: redirect($U, ...)
+          - pattern-not: 'redirect_to($U, ..., allow_other_host: false, ...)'
+          - focus-metavariable: $U

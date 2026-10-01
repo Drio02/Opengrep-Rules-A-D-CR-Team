@@ -1,0 +1,239 @@
+# =====================================================================
+# Ruby (Rails / Sinatra) - Attack & Defense logic bugs
+# =====================================================================
+rules:
+  - id: ruby-hardcoded-session-secret
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      Session / cookie signing secret hardcoded (secret_key_base, Sinatra
+      session_secret, Rack::Session::Cookie). Every team can forge signed
+      cookies -> log in as anyone; with Marshal cookie serializer -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-798
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: config.secret_key_base = "..."
+      - pattern: $APP.config.secret_key_base = "..."
+      - pattern: set :session_secret, "..."
+      - pattern: 'use Rack::Session::Cookie, ..., secret: "...", ...'
+      - pattern: 'use Rack::Session::Cookie, ..., :secret => "...", ...'
+      - pattern: config.action_dispatch.cookies_serializer = :marshal
+
+  - id: ruby-jwt-hardcoded-or-unverified
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      JWT signed with a string literal, or decoded with verify=false. Forge
+      tokens for any user. Rotate the key and always pass true plus an
+      explicit algorithm.
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: JWT.encode($P, "...", ...)
+      - pattern: JWT.decode($T, "...", ...)
+      - pattern: JWT.decode($T, $K, false, ...)
+      - pattern: JWT.decode($T, nil, false, ...)
+
+  - id: ruby-weak-random-token
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      Kernel#rand / Random / Array#sample/shuffle use a Mersenne Twister:
+      predictable. Use SecureRandom.hex / urlsafe_base64 / uuid for tokens,
+      IDs, passwords and reset codes.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: rand(...)
+      - pattern: Random.rand(...)
+      - pattern: Random.new(...)
+      - pattern: srand(...)
+      - pattern: Kernel.rand(...)
+      - pattern: $ARR.sample
+      - pattern: $ARR.shuffle
+
+  - id: ruby-timing-unsafe-secret-compare
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with ==. Use
+      ActiveSupport::SecurityUtils.secure_compare / Rack::Utils.secure_compare
+      and double check the comparison logic.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|api_?key|passw|otp|nonce)\b.*
+      - pattern-not: $A == nil
+      - pattern-not: $A != nil
+      - pattern-not: $A == ""
+
+  - id: ruby-rails-skip-auth-filter
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      Controller skips an authentication/authorization filter. Check that
+      every action left unauthenticated is really public (and does not list
+      or show other users' data).
+    metadata:
+      category: security
+      cwe: CWE-306
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    patterns:
+      - pattern-either:
+          - pattern: skip_before_action $F, ...
+          - pattern: skip_before_filter $F, ...
+          - pattern: skip_around_action $F, ...
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^:(authenticate\w*|require_\w*|authorize\w*|check_\w*|verify_\w*|login\w*|ensure_\w*|admin\w*|logged_in\w*)!?$
+
+  - id: ruby-rails-permit-sensitive-attribute
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      Strong parameters permit a privilege/ownership attribute (role, admin,
+      user_id, owner_id, balance...). The user can set it on their own
+      record or move objects to other accounts.
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: HIGH
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $P.permit(..., $ATTR, ...)
+          - pattern: $P.require($M).permit(..., $ATTR, ...)
+      - metavariable-regex:
+          metavariable: $ATTR
+          regex: ^:(role|roles|admin|is_admin|superuser|user_id|owner_id|account_id|group_id|balance|credits|verified|confirmed|approved|permissions?)$
+
+  - id: ruby-mass-assignment-raw-params
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      Raw params / parsed JSON body passed to create/new/update. In Sinatra
+      or plain ActiveRecord there is no strong-parameters protection:
+      send role=admin or user_id=<victim>. Slice explicit keys.
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $M.new(params)
+      - pattern: $M.create(params)
+      - pattern: $M.create!(params)
+      - pattern: $OBJ.update(params)
+      - pattern: $OBJ.update!(params)
+      - pattern: $OBJ.update_attributes(params)
+      - pattern: $OBJ.assign_attributes(params)
+      - pattern: $M.new(params[$K])
+      - pattern: $M.create(params[$K])
+      - pattern: $OBJ.update(params[$K])
+      - pattern: $M.create(JSON.parse(request.body.read))
+      - pattern: $OBJ.update(JSON.parse(request.body.read))
+      - pattern: $M.new(params.to_unsafe_h)
+      - pattern: $OBJ.update(params.to_unsafe_h)
+
+  - id: ruby-cookie-based-authorization
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      Identity / role read from a plain (unsigned, unencrypted) cookie.
+      Client-controlled: set role=admin or user_id=<victim>. Use session[]
+      or cookies.encrypted / cookies.signed.
+    metadata:
+      category: security
+      cwe: CWE-565
+      confidence: HIGH
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: cookies[$K]
+          - pattern: request.cookies[$K]
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^(:|["'])(is_?admin|admin|role|level|user_?id|uid|userid|username|user|auth|logged_?in)["']?$
+
+  - id: ruby-ip-based-auth-spoofable
+    languages: [ruby]
+    severity: ERROR
+    message: >
+      Client IP read from X-Forwarded-For / X-Real-IP. Client-controlled:
+      "X-Forwarded-For: 127.0.0.1" passes localhost-only checks.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: request.headers["X-Forwarded-For"]
+      - pattern: request.headers["X-Real-IP"]
+      - pattern: request.env["HTTP_X_FORWARDED_FOR"]
+      - pattern: request.env["HTTP_X_REAL_IP"]
+      - pattern: env["HTTP_X_FORWARDED_FOR"]
+
+  - id: ruby-debug-error-pages
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      Detailed error pages / exceptions shown to clients (Rails
+      consider_all_requests_local, Sinatra show_exceptions, better_errors,
+      web-console). Leaks source, env vars and allows code execution
+      (web-console / better_errors REPL).
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: MEDIUM
+      ad-impact: rce
+    pattern-either:
+      - pattern: config.consider_all_requests_local = true
+      - pattern: set :show_exceptions, true
+      - pattern: set :raise_errors, true
+      - pattern: enable :show_exceptions
+      - pattern: config.web_console.whitelisted_ips = $X
+      - pattern: config.web_console.permissions = $X
+      - pattern: BetterErrors::Middleware.allow_ip!($X)
+
+  - id: ruby-regex-validation-line-anchors
+    languages: [ruby]
+    severity: WARNING
+    message: >
+      Validation regex uses ^ / $ (line anchors). In Ruby they match at ANY
+      newline: "evil\n; cat /flag" passes /^[a-z]+$/. Use \A and \z.
+    metadata:
+      category: security
+      cwe: CWE-625
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern: $X =~ $RE
+          - pattern: $RE =~ $X
+          - pattern: $X.match?($RE)
+          - pattern: $X.match($RE)
+          - pattern: $RE.match?($X)
+          - pattern: $RE.match($X)
+          - pattern: 'validates $A, ..., format: { with: $RE, ... }, ...'
+          - pattern: 'validates $A, ..., format: $RE, ...'
+      - metavariable-regex:
+          metavariable: $RE
+          regex: ^/\^.*\$/[a-z]*$
