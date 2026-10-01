@@ -1,0 +1,105 @@
+# =====================================================================
+# docker-compose - vulnbox deployment misconfigurations
+# ---------------------------------------------------------------------
+# Every team receives the same compose file. Anything hardcoded in it
+# (DB passwords, app secrets) is known to all opponents, and any backing
+# service published on 0.0.0.0 is reachable from the game network.
+# These are the first things to fix in the first minutes of the game.
+# =====================================================================
+rules:
+  - id: compose-backing-service-port-exposed
+    languages: [generic]
+    severity: ERROR
+    message: >
+      A database / cache / queue port is published on all interfaces. Other
+      teams can connect directly (often with the default password from this
+      same file) and dump every flag. Remove the "ports:" entry (containers
+      on the same network do not need it) or bind to 127.0.0.1.
+    metadata:
+      category: security
+      cwe: CWE-668
+      confidence: HIGH
+      ad-impact: flag-leak
+    paths:
+      include: ["docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml"]
+    pattern-regex: (?m)^\s*-\s*["']?(0\.0\.0\.0:)?\d{2,5}:(3306|5432|6379|27017|27018|9200|9300|11211|5672|15672|5984|8086|9042|7000|7001|1433|1521|2379|8529|28015|6380|26379|4369|9000|8123|50000)(/tcp)?["']?\s*$
+
+  - id: compose-default-or-empty-db-credentials
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Default / empty database credentials. All teams share this file: change
+      the password on your vulnbox (and in the app's config) right away.
+    metadata:
+      category: security
+      cwe: CWE-1392
+      confidence: HIGH
+      ad-impact: flag-leak
+    paths:
+      include: ["docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml", "*.env", ".env"]
+    pattern-either:
+      - pattern-regex: (?im)(MYSQL_ALLOW_EMPTY_PASSWORD|ALLOW_EMPTY_PASSWORD|MARIADB_ALLOW_EMPTY_ROOT_PASSWORD)\s*[:=]\s*["']?(yes|true|1)["']?
+      - pattern-regex: (?im)POSTGRES_HOST_AUTH_METHOD\s*[:=]\s*["']?trust["']?
+      - pattern-regex: (?im)(MYSQL_ROOT_PASSWORD|MYSQL_PASSWORD|MARIADB_ROOT_PASSWORD|POSTGRES_PASSWORD|MONGO_INITDB_ROOT_PASSWORD|REDIS_PASSWORD|RABBITMQ_DEFAULT_PASS|ELASTIC_PASSWORD|DB_PASSWORD|DATABASE_PASSWORD)\s*[:=]\s*["']?(root|toor|admin|password|passw0rd|postgres|mysql|mongo|example|changeme|secret|test|123456|guest|redis)?["']?\s*$
+      - pattern-regex: (?im)(DATABASE_URL|DB_URL|MONGO_URL|MONGODB_URI|REDIS_URL)\s*[:=]\s*["']?\w+://[^:/\s]+:(root|toor|admin|password|postgres|mysql|example|changeme|secret|test|guest)@
+
+  - id: compose-hardcoded-app-secret
+    languages: [generic]
+    severity: WARNING
+    message: >
+      Application secret hardcoded in the compose file (SECRET_KEY,
+      JWT_SECRET, SESSION_SECRET, APP_KEY...). Identical on every team's
+      vulnbox -> forge sessions/JWTs everywhere. Rotate it on your box
+      (keep the format the app expects).
+    metadata:
+      category: security
+      cwe: CWE-798
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    paths:
+      include: ["docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml", "*.env", ".env"]
+    pattern-regex: (?im)^\s*-?\s*["']?[\w]*(SECRET|SECRET_KEY|JWT_KEY|JWT_SECRET|SESSION_KEY|SIGNING_KEY|APP_KEY|COOKIE_SECRET|ENCRYPTION_KEY|HMAC_KEY|TOKEN_SECRET)["']?\s*[:=]\s*["']?[^\s"'${][^\s"']{2,}["']?\s*$
+
+  - id: compose-privileged-or-host-access
+    languages: [generic]
+    severity: WARNING
+    message: >
+      Container runs privileged, shares the host network/PID namespace, adds
+      dangerous capabilities or mounts the Docker socket / host root. An RCE
+      in this service becomes root on the whole vulnbox (all services, all
+      flags).
+    metadata:
+      category: security
+      cwe: CWE-250
+      confidence: HIGH
+      ad-impact: rce
+    paths:
+      include: ["docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml"]
+    pattern-either:
+      - pattern-regex: (?m)^\s*privileged\s*:\s*["']?true["']?
+      - pattern-regex: (?m)^\s*network_mode\s*:\s*["']?host["']?
+      - pattern-regex: (?m)^\s*pid\s*:\s*["']?host["']?
+      - pattern-regex: (?m)^\s*-\s*["']?(SYS_ADMIN|SYS_PTRACE|NET_ADMIN|SYS_MODULE|DAC_READ_SEARCH|ALL)["']?\s*$
+      - pattern-regex: (?m)^\s*-\s*["']?/var/run/docker\.sock
+      - pattern-regex: (?m)^\s*source\s*:\s*["']?/var/run/docker\.sock
+      - pattern-regex: (?m)^\s*-\s*["']?/:/
+      - pattern-regex: (?m)^\s*-\s*["']?(seccomp|apparmor)[:=]unconfined
+
+  - id: compose-debug-mode-enabled
+    languages: [generic]
+    severity: WARNING
+    message: >
+      Debug / development mode enabled via environment. Framework debug
+      pages leak source, settings and env (flags), and some give a shell
+      (Werkzeug console, Rails web-console).
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: MEDIUM
+      ad-impact: rce
+    paths:
+      include: ["docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml", "*.env", ".env"]
+    pattern-either:
+      - pattern-regex: (?im)\b(FLASK_DEBUG|DJANGO_DEBUG|DEBUG|APP_DEBUG)\s*[:=]\s*["']?(1|true|yes|on)["']?\s*$
+      - pattern-regex: (?im)\b(FLASK_ENV|APP_ENV|NODE_ENV|RAILS_ENV|RACK_ENV|ASPNETCORE_ENVIRONMENT|SPRING_PROFILES_ACTIVE)\s*[:=]\s*["']?(development|dev|debug|local)["']?\s*$
+      - pattern-regex: (?im)WERKZEUG_DEBUG_PIN\s*[:=]\s*["']?off["']?
