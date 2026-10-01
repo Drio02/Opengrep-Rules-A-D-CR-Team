@@ -1,0 +1,347 @@
+# =====================================================================
+# Go - Attack & Defense logic bugs
+# =====================================================================
+rules:
+  - id: go-jwt-parse-error-ignored
+    languages: [go]
+    severity: ERROR
+    message: >
+      jwt.Parse error discarded. On a bad signature jwt.Parse still returns a
+      non-nil *Token (Valid=false) with the claims filled in, so using
+      token.Claims without checking err / token.Valid accepts forged tokens.
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $TOK, _ := jwt.Parse(...)
+      - pattern: $TOK, _ = jwt.Parse(...)
+      - pattern: $TOK, _ := jwt.ParseWithClaims(...)
+      - pattern: $TOK, _ = jwt.ParseWithClaims(...)
+      - pattern: $TOK, _ := $PARSER.Parse(...)
+      - pattern: $TOK, _ := $PARSER.ParseWithClaims(...)
+
+  - id: go-jwt-keyfunc-no-alg-check
+    languages: [go]
+    severity: WARNING
+    message: >
+      jwt.Parse keyfunc does not check token.Method and no WithValidMethods
+      option is set. With RSA/ECDSA keys this enables alg confusion; with
+      some libraries alg=none. Check the method or pass
+      jwt.WithValidMethods([]string{"HS256"}).
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: 'jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) { ... })'
+          - pattern: 'jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) { ... })'
+      - pattern-not: 'jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) { ... }, ..., jwt.WithValidMethods(...), ...)'
+      - pattern-not: 'jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) { ... }, ..., jwt.WithValidMethods(...), ...)'
+      # the keyfunc verifies the signing method itself
+      - pattern-not: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $V, $OK := $TOK.Method.($TYPE); !$OK {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if _, $OK := $TOK.Method.($TYPE); !$OK {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Method != $M {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Method.Alg() != $M {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Header["alg"] != $M {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $V, $OK := $TOK.Method.($TYPE); !$OK {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if _, $OK := $TOK.Method.($TYPE); !$OK {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Method != $M {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Method.Alg() != $M {
+              ...
+            }
+            ...
+          })
+      - pattern-not: |
+          jwt.ParseWithClaims($T, $CL, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            if $TOK.Header["alg"] != $M {
+              ...
+            }
+            ...
+          })
+
+  - id: go-hardcoded-signing-key
+    languages: [go]
+    severity: ERROR
+    message: >
+      JWT / session / cookie signing key is a string literal. Every team has
+      it -> forge sessions/tokens for any user. Generate it at boot
+      (crypto/rand) or read it from the environment on your vulnbox.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $TOK.SignedString([]byte("..."))
+      - pattern: sessions.NewCookieStore([]byte("..."), ...)
+      - pattern: sessions.NewFilesystemStore($P, []byte("..."), ...)
+      - pattern: cookie.NewStore([]byte("..."), ...)
+      - pattern: securecookie.New([]byte("..."), ...)
+      - pattern: |
+          jwt.Parse($T, func($TOK *jwt.Token) (interface{}, error) {
+            ...
+            return []byte("..."), nil
+          })
+      - patterns:
+          - pattern-either:
+              - pattern: var $K = []byte("...")
+              - pattern: $K := []byte("...")
+              - pattern: const $K = "..."
+              - pattern: var $K = "..."
+          - metavariable-regex:
+              metavariable: $K
+              regex: (?i).*(jwt|secret|signing|hmac|session).*(key|secret)?.*
+
+  - id: go-rand-seeded-with-time
+    languages: [go]
+    severity: ERROR
+    message: >
+      math/rand seeded with the current time (or a constant). The seed is
+      guessable within a few seconds -> every token/ID can be regenerated.
+      Use crypto/rand for anything security-related.
+    metadata:
+      category: security
+      cwe: CWE-335
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: rand.Seed(time.Now().$F())
+      - pattern: rand.Seed($N)
+      - pattern: rand.NewSource(time.Now().$F())
+      - pattern: rand.New(rand.NewSource(time.Now().$F()))
+      - pattern: rand.NewSource($LIT)
+
+  - id: go-password-compare-result-ignored
+    languages: [go]
+    severity: ERROR
+    message: >
+      Result of bcrypt.CompareHashAndPassword / subtle.ConstantTimeCompare
+      is ignored. The check never fails -> any password works.
+    metadata:
+      category: security
+      cwe: CWE-252
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: _ = bcrypt.CompareHashAndPassword($H, $P)
+      - pattern: _ = subtle.ConstantTimeCompare($A, $B)
+      # called as a bare statement: the return value goes nowhere
+      - patterns:
+          - pattern-either:
+              - pattern: bcrypt.CompareHashAndPassword($H, $P)
+              - pattern: subtle.ConstantTimeCompare($H, $P)
+          - pattern-not-inside: $L == $R
+          - pattern-not-inside: $L != $R
+          - pattern-not-inside: $X := $CALL
+          - pattern-not-inside: $X = $CALL
+          - pattern-not-inside: return ...
+
+  - id: go-timing-unsafe-secret-compare
+    languages: [go]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with == or !=. Use
+      subtle.ConstantTimeCompare / hmac.Equal and double check what is
+      compared (often the only auth check in the service).
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|apikey|api_key|passw|otp|nonce|mac)\b.*
+      - pattern-not: $A == nil
+      - pattern-not: $A != nil
+      - pattern-not: $A == ""
+      - pattern-not: $A != ""
+
+  - id: go-mass-assignment-bind-save
+    languages: [go]
+    severity: ERROR
+    message: >
+      Request body bound straight into a DB model that is then saved.
+      Fields like Role/IsAdmin/OwnerID are attacker-controlled. Bind into a
+      DTO with only allowed fields, or use db.Select("Name","Bio").
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: |
+          $C.ShouldBindJSON(&$M)
+          ...
+          $DB.$SAVE(&$M)
+      - pattern: |
+          $C.BindJSON(&$M)
+          ...
+          $DB.$SAVE(&$M)
+      - pattern: |
+          $C.Bind(&$M)
+          ...
+          $DB.$SAVE(&$M)
+      - pattern: |
+          json.NewDecoder($R.Body).Decode(&$M)
+          ...
+          $DB.$SAVE(&$M)
+      - pattern: |
+          if $ERR := $C.ShouldBindJSON(&$M); $ERR != nil { ... }
+          ...
+          $DB.$SAVE(&$M)
+      - pattern: |
+          if $ERR := json.NewDecoder($R.Body).Decode(&$M); $ERR != nil { ... }
+          ...
+          $DB.$SAVE(&$M)
+
+  - id: go-cookie-based-authorization
+    languages: [go]
+    severity: ERROR
+    message: >
+      Identity / role read from a plain cookie. Cookies are client-controlled:
+      set role=admin or user_id=<victim>. Use a signed session (securecookie)
+      or a server-side session store.
+    metadata:
+      category: security
+      cwe: CWE-565
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $R.Cookie($K)
+          - pattern: $C.Cookie($K)
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^"(is_?admin|admin|role|level|user_?id|uid|userid|username|user|auth|logged_?in)"$
+
+  - id: go-ip-based-auth-spoofable
+    languages: [go]
+    severity: ERROR
+    message: >
+      Client IP taken from X-Forwarded-For / X-Real-IP or gin's ClientIP()
+      (which trusts those headers unless SetTrustedProxies is configured).
+      Send "X-Forwarded-For: 127.0.0.1" to pass "localhost only" checks.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $R.Header.Get("X-Forwarded-For")
+      - pattern: $R.Header.Get("X-Real-Ip")
+      - pattern: $R.Header.Get("X-Real-IP")
+      - pattern: $C.GetHeader("X-Forwarded-For")
+      - pattern: $C.GetHeader("X-Real-IP")
+      - pattern: $C.ClientIP() == $X
+
+  - id: go-unsafe-package
+    languages: [go]
+    severity: INFO
+    message: >
+      unsafe.Pointer / reflect.SliceHeader breaks Go memory safety. In an A&D
+      service this is almost always where the planted memory bug lives
+      (OOB read of other users' data).
+    metadata:
+      category: security
+      cwe: CWE-242
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: unsafe.Pointer(...)
+      - pattern: unsafe.Slice(...)
+      - pattern: unsafe.String(...)
+      - pattern: (*reflect.SliceHeader)(...)
+      - pattern: (*reflect.StringHeader)(...)
+
+  - id: go-integer-truncation-after-parse
+    languages: [go]
+    severity: WARNING
+    message: >
+      strconv.Atoi/ParseInt result narrowed to a smaller integer type. Large
+      values wrap around (e.g. negative ids, bypassed length/price/balance
+      checks). Parse with the right bitSize and check bounds.
+    metadata:
+      category: security
+      cwe: CWE-681
+      confidence: MEDIUM
+      ad-impact: integrity
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $V, $E := strconv.Atoi($S)
+              ...
+          - pattern-inside: |
+              $V, $E := strconv.ParseInt($S, $B, 64)
+              ...
+      - pattern: $T($V)
+      - metavariable-regex:
+          metavariable: $T
+          regex: ^(int8|int16|int32|uint8|uint16|uint32|uint|byte)$
