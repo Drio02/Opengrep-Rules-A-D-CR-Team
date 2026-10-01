@@ -1,0 +1,224 @@
+# =====================================================================
+# C / C++ - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources: bytes received from the client (read/recv/fgets/scanf fill
+# their buffer argument), environment and argv (CGI binaries).
+# =====================================================================
+rules:
+  - id: c-taint-command-injection
+    mode: taint
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      Client-controlled bytes reach system()/popen()/exec. Build an argv
+      array for execve and validate every argument.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: read($FD, $BUF, ...)
+              - pattern: recv($FD, $BUF, ...)
+              - pattern: recvfrom($FD, $BUF, ...)
+              - pattern: fgets($BUF, ...)
+              - pattern: fread($BUF, ...)
+              - pattern: getline(&$BUF, ...)
+              - pattern: scanf($FMT, ..., $BUF, ...)
+              - pattern: fscanf($F, $FMT, ..., $BUF, ...)
+              - pattern: sscanf($S, $FMT, ..., $BUF, ...)
+          - focus-metavariable: $BUF
+      - pattern: getenv(...)
+      - pattern: secure_getenv(...)
+      - patterns:
+          - pattern-inside: |
+              int main(int $ARGC, char **$ARGV) { ... }
+          - pattern: $ARGV
+    pattern-sanitizers:
+      - pattern: atoi(...)
+      - pattern: atol(...)
+      - pattern: strtol(...)
+      - pattern: strtoul(...)
+    # taint flows into out-parameters of the string/memory helpers
+    pattern-propagators:
+      - pattern: snprintf($TO, $N, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: sprintf($TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: strcpy($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: strcat($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncat($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: memcpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: system($C)
+              - pattern: popen($C, ...)
+              - pattern: execl($P, ..., $C, ...)
+              - pattern: execlp($P, ..., $C, ...)
+              - pattern: execv($C, ...)
+              - pattern: execvp($C, ...)
+          - focus-metavariable: $C
+
+  - id: c-taint-format-string
+    mode: taint
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      Client-controlled bytes used as a printf format string. %p/%s leak the
+      stack (canary, libc, flags in memory), %n writes memory -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-134
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: read($FD, $BUF, ...)
+              - pattern: recv($FD, $BUF, ...)
+              - pattern: recvfrom($FD, $BUF, ...)
+              - pattern: fgets($BUF, ...)
+              - pattern: fread($BUF, ...)
+              - pattern: getline(&$BUF, ...)
+              - pattern: scanf($FMT, ..., $BUF, ...)
+              - pattern: fscanf($F, $FMT, ..., $BUF, ...)
+              - pattern: sscanf($S, $FMT, ..., $BUF, ...)
+          - focus-metavariable: $BUF
+      - pattern: getenv(...)
+      - pattern: secure_getenv(...)
+      - patterns:
+          - pattern-inside: |
+              int main(int $ARGC, char **$ARGV) { ... }
+          - pattern: $ARGV
+    # taint flows into out-parameters of the string/memory helpers
+    pattern-propagators:
+      - pattern: snprintf($TO, $N, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: sprintf($TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: strcpy($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: strcat($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncat($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: memcpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: printf($FMT, ...)
+              - pattern: fprintf($F, $FMT, ...)
+              - pattern: dprintf($F, $FMT, ...)
+              - pattern: sprintf($D, $FMT, ...)
+              - pattern: snprintf($D, $N, $FMT, ...)
+              - pattern: syslog($P, $FMT, ...)
+          - focus-metavariable: $FMT
+
+  - id: c-taint-size-or-index
+    mode: taint
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      Client-controlled number used as a copy size, allocation size or array
+      index without a visible bounds check. Negative / huge values -> OOB
+      read/write (leak other users' records or overwrite heap metadata).
+    metadata:
+      category: security
+      cwe: CWE-129
+      confidence: LOW
+      ad-impact: rce
+    pattern-sources:
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: read($FD, $BUF, ...)
+              - pattern: recv($FD, $BUF, ...)
+              - pattern: recvfrom($FD, $BUF, ...)
+              - pattern: fgets($BUF, ...)
+              - pattern: fread($BUF, ...)
+              - pattern: getline(&$BUF, ...)
+              - pattern: scanf($FMT, ..., $BUF, ...)
+              - pattern: fscanf($F, $FMT, ..., $BUF, ...)
+              - pattern: sscanf($S, $FMT, ..., $BUF, ...)
+          - focus-metavariable: $BUF
+      - pattern: getenv(...)
+      - pattern: secure_getenv(...)
+      - patterns:
+          - pattern-inside: |
+              int main(int $ARGC, char **$ARGV) { ... }
+          - pattern: $ARGV
+    pattern-sanitizers:
+      # once the value has been compared against a bound, treat it as checked
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: $X < $B
+              - pattern: $X <= $B
+              - pattern: $X > $B
+              - pattern: $X >= $B
+          - focus-metavariable: $X
+    # taint flows into out-parameters of the string/memory helpers
+    pattern-propagators:
+      - pattern: snprintf($TO, $N, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: sprintf($TO, $FMT, ..., $FROM, ...)
+        from: $FROM
+        to: $TO
+      - pattern: strcpy($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: strcat($TO, $FROM)
+        from: $FROM
+        to: $TO
+      - pattern: strncat($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+      - pattern: memcpy($TO, $FROM, $N)
+        from: $FROM
+        to: $TO
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: memcpy($D, $S, $N)
+              - pattern: memmove($D, $S, $N)
+              - pattern: strncpy($D, $S, $N)
+              - pattern: read($FD, $B, $N)
+              - pattern: recv($FD, $B, $N, $FL)
+              - pattern: malloc($N)
+              - pattern: alloca($N)
+          - focus-metavariable: $N
+      - patterns:
+          - pattern: $ARR[$N]
+          - focus-metavariable: $N
