@@ -1,0 +1,479 @@
+# =====================================================================
+# C# (ASP.NET Core / MVC / Web API) - taint mode (dataflow) rules
+# =====================================================================
+rules:
+  - id: cs-taint-sqli
+    mode: taint
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request data reaches a raw SQL string (SqlCommand, EF FromSqlRaw/
+      ExecuteSqlRaw, Dapper). Use parameters (@id) or FromSqlInterpolated.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sanitizers:
+      - pattern: int.Parse(...)
+      - pattern: long.Parse(...)
+      - pattern: Guid.Parse(...)
+      - pattern: Convert.ToInt32(...)
+      - pattern: Convert.ToInt64(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new SqlCommand($Q, ...)
+              - pattern: new SqliteCommand($Q, ...)
+              - pattern: new NpgsqlCommand($Q, ...)
+              - pattern: new MySqlCommand($Q, ...)
+              - pattern: $CMD.CommandText = $Q
+              - pattern: $SET.FromSqlRaw($Q, ...)
+              - pattern: $DB.Database.ExecuteSqlRaw($Q, ...)
+              - pattern: $DB.Database.ExecuteSqlRawAsync($Q, ...)
+              - pattern: $DB.Database.SqlQueryRaw<$T>($Q, ...)
+              - pattern: $CONN.Query($Q, ...)
+              - pattern: $CONN.Query<$T>($Q, ...)
+              - pattern: $CONN.QueryAsync<$T>($Q, ...)
+              - pattern: $CONN.QueryFirstOrDefault<$T>($Q, ...)
+              - pattern: $CONN.QueryFirstOrDefaultAsync<$T>($Q, ...)
+              - pattern: $CONN.QuerySingle<$T>($Q, ...)
+              - pattern: $CONN.Execute($Q, ...)
+              - pattern: $CONN.ExecuteAsync($Q, ...)
+              - pattern: $CONN.ExecuteScalar($Q, ...)
+          - focus-metavariable: $Q
+
+  - id: cs-taint-command-injection
+    mode: taint
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request data reaches Process.Start / ProcessStartInfo (FileName or
+      Arguments). With "/bin/sh -c" or cmd.exe /c it is full command
+      injection. Use ArgumentList with validated values.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sanitizers:
+      - pattern: int.Parse(...)
+      - pattern: long.Parse(...)
+      - pattern: Guid.Parse(...)
+      - pattern: Convert.ToInt32(...)
+      - pattern: Convert.ToInt64(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Process.Start($X, ...)
+              - pattern: Process.Start($F, $X)
+              - pattern: new ProcessStartInfo($X, ...)
+              - pattern: new ProcessStartInfo($F, $X)
+              - pattern: $PSI.FileName = $X
+              - pattern: $PSI.Arguments = $X
+          - focus-metavariable: $X
+
+  - id: cs-taint-path-traversal
+    mode: taint
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request data reaches a file path. Path.Combine("/base", "/etc/x")
+      returns "/etc/x" and "../" is not removed. Use Path.GetFileName and
+      check Path.GetFullPath(p).StartsWith(base).
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sanitizers:
+      - pattern: Path.GetFileName(...)
+      - pattern: int.Parse(...)
+      - pattern: Guid.Parse(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: File.$FN($P, ...)
+              - pattern: Directory.$FN($P, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(ReadAllText|ReadAllTextAsync|ReadAllBytes|ReadAllBytesAsync|ReadAllLines|ReadLines|OpenRead|OpenWrite|Open|Create|WriteAllText|WriteAllTextAsync|WriteAllBytes|WriteAllBytesAsync|AppendAllText|Delete|Copy|Move|Exists|GetFiles|GetDirectories|EnumerateFiles|CreateDirectory)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: new FileStream($P, ...)
+              - pattern: new StreamReader($P, ...)
+              - pattern: new StreamWriter($P, ...)
+              - pattern: new FileInfo($P)
+              - pattern: PhysicalFile($P, ...)
+              - pattern: Path.Combine(..., $P, ...)
+          - focus-metavariable: $P
+
+  - id: cs-taint-ssrf
+    mode: taint
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      Request data controls the URL of an outgoing request (HttpClient,
+      WebRequest, WebClient). Allowlist host and scheme and block internal
+      ranges.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $HC.GetAsync($U, ...)
+              - pattern: $HC.GetStringAsync($U, ...)
+              - pattern: $HC.GetByteArrayAsync($U, ...)
+              - pattern: $HC.GetStreamAsync($U, ...)
+              - pattern: $HC.PostAsync($U, ...)
+              - pattern: $HC.PutAsync($U, ...)
+              - pattern: $HC.DeleteAsync($U, ...)
+              - pattern: new HttpRequestMessage($M, $U)
+              - pattern: WebRequest.Create($U)
+              - pattern: $WC.DownloadString($U)
+              - pattern: $WC.DownloadData($U)
+              - pattern: new Uri($U, ...)
+          - focus-metavariable: $U
+
+  - id: cs-taint-deserialization
+    mode: taint
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request data reaches a type-instantiating deserializer
+      (BinaryFormatter, NetDataContractSerializer, LosFormatter,
+      Json.NET with TypeNameHandling, XmlSerializer with a user type).
+      Gadget chains (ysoserial.net) -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $BF.Deserialize($D, ...)
+              - pattern: $LF.Deserialize($D)
+              - pattern: JsonConvert.DeserializeObject($D, $SETTINGS)
+              - pattern: JsonConvert.DeserializeObject<$T>($D, $SETTINGS)
+              - pattern: Type.GetType($D, ...)
+              - pattern: Activator.CreateInstance(Type.GetType($D), ...)
+          - focus-metavariable: $D
+
+  - id: cs-taint-ssti
+    mode: taint
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request data compiled as a Razor/Scriban/Fluid/Handlebars template.
+      Razor templates are C# code -> RCE (@System.Diagnostics.Process.Start).
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Engine.Razor.RunCompile($T, ...)
+              - pattern: Razor.Parse($T, ...)
+              - pattern: $ENGINE.CompileRenderStringAsync($K, $T, ...)
+              - pattern: Template.Parse($T, ...)
+              - pattern: Handlebars.Compile($T)
+              - pattern: $PARSER.Parse($T)
+          - focus-metavariable: $T
+
+  - id: cs-taint-open-redirect
+    mode: taint
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      Request data controls a redirect target. Use LocalRedirect() or check
+      Url.IsLocalUrl() first.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sanitizers:
+      - patterns:
+          - pattern-inside: if (Url.IsLocalUrl($U)) { ... }
+          - pattern: $U
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Redirect($U)
+              - pattern: RedirectPermanent($U)
+              - pattern: Response.Redirect($U, ...)
+              - pattern: new RedirectResult($U, ...)
+          - focus-metavariable: $U
+
+  - id: cs-taint-xss
+    mode: taint
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      Request data returned as raw HTML (Content(..., "text/html"),
+      HtmlString, Response.WriteAsync). Encode with HtmlEncoder.Default.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR] $T $P, ...) { ... }
+              - pattern-inside: |
+                  public async $RET $M(..., [$ATTR(...)] $T $P, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ATTR
+              regex: ^(FromQuery|FromBody|FromRoute|FromForm|FromHeader)$
+          - pattern: $P
+      - pattern: Request.Query
+      - pattern: Request.Form
+      - pattern: Request.Headers
+      - pattern: Request.Cookies
+      - pattern: Request.Body
+      - pattern: Request.Path
+      - pattern: Request.QueryString
+      - pattern: HttpContext.Request.Query
+      - pattern: HttpContext.Request.Form
+      - pattern: HttpContext.Request.Headers
+      - pattern: HttpContext.Request.Cookies
+      - pattern: HttpContext.Request.Body
+      - pattern: $CTX.Request.Query
+      - pattern: $CTX.Request.Form
+      - pattern: $CTX.Request.Cookies
+    pattern-sanitizers:
+      - pattern: HtmlEncoder.Default.Encode(...)
+      - pattern: WebUtility.HtmlEncode(...)
+      - pattern: HttpUtility.HtmlEncode(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Content($X, "text/html", ...)
+              - pattern: new HtmlString($X)
+              - pattern: Html.Raw($X)
+              - pattern: Response.WriteAsync($X, ...)
+              - pattern: $CTX.Response.WriteAsync($X, ...)
+          - focus-metavariable: $X
