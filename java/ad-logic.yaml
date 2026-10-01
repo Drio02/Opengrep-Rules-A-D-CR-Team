@@ -1,0 +1,306 @@
+# =====================================================================
+# Java (Spring) - Attack & Defense logic bugs
+# =====================================================================
+rules:
+  - id: java-spring-permitall-sensitive-path
+    languages: [java]
+    severity: ERROR
+    message: >
+      Spring Security permits unauthenticated access to a sensitive path, or
+      to every request. Check /admin, /api/flags, /actuator etc. are not
+      left open.
+    metadata:
+      category: security
+      cwe: CWE-306
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: $H.anyRequest().permitAll()
+      - patterns:
+          - pattern-either:
+              - pattern: $H.requestMatchers(..., $PATH, ...).permitAll()
+              - pattern: $H.antMatchers(..., $PATH, ...).permitAll()
+              - pattern: $H.mvcMatchers(..., $PATH, ...).permitAll()
+              - pattern: $H.regexMatchers(..., $PATH, ...).permitAll()
+          - metavariable-regex:
+              metavariable: $PATH
+              regex: (?i).*(admin|flag|internal|debug|actuator|h2|console|manage|export|backup|secret|\*\*).*
+
+  - id: java-spring-csrf-disabled
+    languages: [java]
+    severity: INFO
+    message: >
+      CSRF protection disabled. Fine for pure token APIs, but with cookie
+      sessions the checker bot can be made to perform actions.
+    metadata:
+      category: security
+      cwe: CWE-352
+      confidence: HIGH
+      ad-impact: integrity
+    pattern-either:
+      - pattern: $H.csrf().disable()
+      - pattern: $H.csrf($C -> $C.disable())
+      - pattern: $H.csrf(AbstractHttpConfigurer::disable)
+
+  - id: java-jwt-hardcoded-key
+    languages: [java]
+    severity: ERROR
+    message: >
+      JWT signing key is a string literal (jjwt / auth0 java-jwt / Nimbus).
+      Every team has it -> forge tokens for any user. Load from env or
+      generate at boot.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $B.signWith($ALG, "...")
+      - pattern: $B.signWith("...", ...)
+      - pattern: $B.setSigningKey("...")
+      - pattern: $B.setSigningKey("...".getBytes(...))
+      - pattern: Keys.hmacShaKeyFor("...".getBytes(...))
+      - pattern: Algorithm.HMAC256("...")
+      - pattern: Algorithm.HMAC384("...")
+      - pattern: Algorithm.HMAC512("...")
+      - pattern: new MACSigner("...")
+      - pattern: new MACVerifier("...")
+      - pattern: new SecretKeySpec("...".getBytes(...), ...)
+
+  - id: java-weak-random-token
+    languages: [java]
+    severity: WARNING
+    message: >
+      java.util.Random / Math.random / RandomStringUtils.random* are
+      predictable (48-bit LCG: two outputs recover the state). Use
+      SecureRandom for tokens, IDs, passwords and reset codes.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: Math.random()
+      - pattern: new Random($SEED)
+      - pattern: ThreadLocalRandom.current()
+      - pattern: RandomStringUtils.random(...)
+      - pattern: RandomStringUtils.randomAlphanumeric(...)
+      - pattern: RandomStringUtils.randomAlphabetic(...)
+      - pattern: RandomStringUtils.randomNumeric(...)
+
+  - id: java-timing-unsafe-secret-compare
+    languages: [java]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with equals(). Use
+      MessageDigest.isEqual on bytes, and double check the comparison is
+      the right one (often the only auth check of the service).
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A.equals($B)
+          - pattern: $B.equals($A)
+          - pattern: Objects.equals($A, $B)
+          - pattern: $A.equalsIgnoreCase($B)
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|apikey|api_key|otp|nonce)\b.*
+
+  - id: java-string-reference-compare
+    languages: [java]
+    severity: WARNING
+    message: >
+      Strings compared with == / != compare references, not content. Auth
+      checks become always-false (DoS for the checker) or, with interned
+      literals, accidentally true. Use equals / MessageDigest.isEqual.
+    metadata:
+      category: security
+      cwe: CWE-597
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: (String $A) == (String $B)
+      - pattern: (String $A) != (String $B)
+      - pattern: (String $A) == "..."
+      - pattern: (String $A) != "..."
+
+  - id: java-spring-mass-assignment
+    languages: [java]
+    severity: ERROR
+    message: >
+      @RequestBody / @ModelAttribute bound directly to an entity that is
+      saved. role/isAdmin/owner fields are attacker-controlled. Bind to a
+      DTO and copy allowed fields, or use @JsonIgnore / @InitBinder
+      setAllowedFields.
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: |
+          $RET $M(..., @RequestBody $T $U, ...) {
+            ...
+            $REPO.save($U);
+            ...
+          }
+      - pattern: |
+          $RET $M(..., @RequestBody $T $U, ...) {
+            ...
+            return $REPO.save($U);
+          }
+      - pattern: |
+          $RET $M(..., @ModelAttribute $T $U, ...) {
+            ...
+            $REPO.save($U);
+            ...
+          }
+      - pattern: |
+          $RET $M(..., @Valid @RequestBody $T $U, ...) {
+            ...
+            $REPO.save($U);
+            ...
+          }
+
+  - id: java-spring-view-name-injection
+    languages: [java]
+    severity: ERROR
+    message: >
+      Controller returns a view name built from user input. Thymeleaf
+      evaluates "__${T(java.lang.Runtime).getRuntime().exec('id')}__::x"
+      in view names -> RCE (Spring View Manipulation). Map input to a fixed
+      set of views or annotate with @ResponseBody.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$MAP(...)
+              String $M(..., @$ANNO(...) $T $P, ...) {
+                ...
+                return "..." + $P + ...;
+              }
+          - pattern: |
+              @$MAP(...)
+              String $M(..., @$ANNO $T $P, ...) {
+                ...
+                return "..." + $P + ...;
+              }
+          - pattern: |
+              @$MAP(...)
+              String $M(..., @$ANNO(...) $T $P, ...) {
+                ...
+                return "..." + $P;
+              }
+          - pattern: |
+              @$MAP(...)
+              String $M(..., @$ANNO $T $P, ...) {
+                ...
+                return "..." + $P;
+              }
+      - metavariable-regex:
+          metavariable: $MAP
+          regex: ^(GetMapping|PostMapping|RequestMapping|PutMapping)$
+      - metavariable-regex:
+          metavariable: $ANNO
+          regex: ^(RequestParam|PathVariable|RequestHeader|CookieValue)$
+      - pattern-not-inside: |
+          @ResponseBody
+          String $M(...) { ... }
+      - pattern-not-inside: |
+          @RestController
+          class $C { ... }
+
+  - id: java-jackson-polymorphic-typing
+    languages: [java]
+    severity: ERROR
+    message: >
+      Jackson default/polymorphic typing with class names from the JSON
+      ("@class"). Gadget classes on the classpath -> RCE. Remove it or use
+      a strict PolymorphicTypeValidator allowlist.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern: $M.enableDefaultTyping(...)
+      - pattern: $M.activateDefaultTyping(...)
+      - pattern: '@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS, ...)'
+      - pattern: '@JsonTypeInfo(use = JsonTypeInfo.Id.MINIMAL_CLASS, ...)'
+      - pattern: '@JsonTypeInfo(use = Id.CLASS, ...)'
+
+  - id: java-ip-based-auth-spoofable
+    languages: [java]
+    severity: ERROR
+    message: >
+      Client IP taken from X-Forwarded-For / X-Real-IP. The header is set by
+      the client: "X-Forwarded-For: 127.0.0.1" passes localhost-only checks.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $REQ.getHeader("X-Forwarded-For")
+      - pattern: $REQ.getHeader("x-forwarded-for")
+      - pattern: $REQ.getHeader("X-Real-IP")
+      - pattern: $REQ.getHeader("X-Real-Ip")
+
+  - id: java-cookie-based-authorization
+    languages: [java]
+    severity: ERROR
+    message: >
+      Role / identity read from a plain cookie. Cookies are client-controlled:
+      set role=admin or userId=<victim>. Use the server-side session or a
+      signed token.
+    metadata:
+      category: security
+      cwe: CWE-565
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: '$RET $M(..., @CookieValue($K) $T $V, ...) { ... }'
+          - pattern: '$RET $M(..., @CookieValue(value = $K, ...) $T $V, ...) { ... }'
+          - pattern: '$RET $M(..., @CookieValue(name = $K, ...) $T $V, ...) { ... }'
+          - pattern: $C.getName().equals($K)
+          - pattern: $K.equals($C.getName())
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^"(is_?admin|admin|role|level|user_?id|uid|userid|username|user|auth|logged_?in)"$
+
+  - id: java-spring-config-exposes-internals
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Spring Boot config exposes internals: all actuator endpoints
+      (/actuator/env, /heapdump leak secrets and flags in memory), the H2
+      web console (JDBC URL -> RCE), or full error details / stack traces.
+    metadata:
+      category: security
+      cwe: CWE-215
+      confidence: HIGH
+      ad-impact: flag-leak
+    paths:
+      include:
+        - "application*.properties"
+        - "application*.yml"
+        - "application*.yaml"
+        - "bootstrap*.properties"
+        - "bootstrap*.yml"
+    pattern-either:
+      - pattern-regex: management\.endpoints\.web\.exposure\.include\s*[=:]\s*["']?\*
+      - pattern-regex: (?m)^\s*include\s*:\s*["']?\*["']?\s*$
+      - pattern-regex: spring\.h2\.console\.enabled\s*[=:]\s*true
+      - pattern-regex: (?m)^\s*h2\s*:\s*\n\s*console\s*:\s*\n\s*enabled\s*:\s*true
+      - pattern-regex: server\.error\.include-stacktrace\s*[=:]\s*always
+      - pattern-regex: management\.endpoint\.env\.show-values\s*[=:]\s*always
+      - pattern-regex: management\.security\.enabled\s*[=:]\s*false
