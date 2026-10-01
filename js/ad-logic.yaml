@@ -1,0 +1,333 @@
+# =====================================================================
+# JavaScript / TypeScript (Node.js) - Attack & Defense logic bugs
+# =====================================================================
+rules:
+  - id: js-hardcoded-session-secret
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      express-session / cookie-session / cookie-parser secret hardcoded.
+      All teams have this source: anyone can sign a session cookie for any
+      user. Replace with crypto.randomBytes(32) or an env var on your box.
+    metadata:
+      category: security
+      cwe: CWE-798
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: 'session({..., secret: "...", ...})'
+      - pattern: 'session({..., secret: ["...", ...], ...})'
+      - pattern: 'cookieSession({..., secret: "...", ...})'
+      - pattern: 'cookieSession({..., keys: ["...", ...], ...})'
+      - pattern: cookieParser("...")
+
+  - id: js-jwt-hardcoded-secret
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      JWT signed/verified with a string literal secret. Public to every team
+      -> forge tokens for any user. Rotate it on your vulnbox.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: jwt.sign($P, "...", ...)
+      - pattern: jwt.verify($T, "...", ...)
+      - pattern: jsonwebtoken.sign($P, "...", ...)
+      - pattern: jsonwebtoken.verify($T, "...", ...)
+      - pattern: 'new SignJWT($P).sign(new TextEncoder().encode("..."))'
+
+  - id: js-jwt-verify-without-algorithms
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      jwt.verify() without an explicit 'algorithms' allowlist. With old
+      jsonwebtoken versions and an RSA public key this allows HS256 key
+      confusion (sign with the public key as HMAC secret). Pin algorithms.
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: jwt.verify($T, $K)
+          - pattern: jwt.verify($T, $K, $CB)
+          - pattern: jwt.verify($T, $K, {...})
+      - pattern-not: 'jwt.verify($T, $K, {..., algorithms: $A, ...}, ...)'
+      - pattern-not: 'jwt.verify($T, $K, {..., algorithms: $A, ...})'
+
+  - id: js-weak-random-token
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Math.random() is not cryptographically secure (V8 xorshift128+ state is
+      recoverable from a few outputs). For tokens, IDs, passwords, reset
+      codes, filenames use crypto.randomBytes / crypto.randomUUID.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern: Math.random()
+
+  - id: js-timing-unsafe-secret-compare
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Secret/token/password compared with ==/===. Loose == also allows type
+      juggling (["tok"] == "tok"). Use crypto.timingSafeEqual and make sure
+      both sides are strings.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A === $B
+          - pattern: $A != $B
+          - pattern: $A !== $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|api_?key|apikey|passw|otp|nonce)\b.*
+      - pattern-not: $A === undefined
+      - pattern-not: $A === null
+      - pattern-not: $A == null
+      - pattern-not: $A !== undefined
+      - pattern-not: $A !== null
+      - pattern-not: $A != null
+      - pattern-not: $A === ""
+
+  - id: js-password-compare-not-awaited
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      bcrypt.compare / argon2.verify return a Promise. Without await the
+      Promise object is always truthy -> ANY password is accepted.
+    metadata:
+      category: security
+      cwe: CWE-287
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: if (bcrypt.compare(...)) $BODY
+      - pattern: if (!bcrypt.compare(...)) $BODY
+      - pattern: if (argon2.verify(...)) $BODY
+      - pattern: if (!argon2.verify(...)) $BODY
+      - pattern: if (bcryptjs.compare(...)) $BODY
+      - pattern: '$X = bcrypt.compare($A, $B) ? $Y : $Z'
+      - pattern: |
+          const $OK = bcrypt.compare($A, $B);
+          ...
+          if ($OK) $BODY
+      - pattern: |
+          const $OK = argon2.verify($A, $B);
+          ...
+          if ($OK) $BODY
+
+  - id: js-res-render-user-options
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      res.render(view, req.query/req.body) passes attacker-controlled options
+      to the view engine. EJS/hbs/pug read settings such as
+      outputFunctionName / settings['view options'] from it -> RCE
+      (CVE-2022-29078 family). Pass an explicit object of fields.
+    metadata:
+      category: security
+      cwe: CWE-94
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern: $RES.render($V, req.query, ...)
+      - pattern: $RES.render($V, req.body, ...)
+      - pattern: $RES.render($V, req.params, ...)
+      - pattern: '$RES.render($V, {..., ...req.query, ...}, ...)'
+      - pattern: '$RES.render($V, {..., ...req.body, ...}, ...)'
+      - pattern: $RES.render($V, Object.assign(..., req.query, ...), ...)
+      - pattern: $RES.render($V, Object.assign(..., req.body, ...), ...)
+
+  - id: js-mass-assignment
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      Whole request body written into a model. Attacker sends
+      {"role":"admin","isAdmin":true,"owner":"<victim>"}. Pick allowed fields
+      explicitly (const {name, bio} = req.body).
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $M.create(req.body, ...)
+      - pattern: new $M(req.body)
+      - pattern: $M.update(req.body, ...)
+      - pattern: $M.insertOne(req.body, ...)
+      - pattern: $M.findByIdAndUpdate($ID, req.body, ...)
+      - pattern: $M.findOneAndUpdate($Q, req.body, ...)
+      - pattern: $M.updateOne($Q, req.body, ...)
+      - pattern: '$M.updateOne($Q, {$set: req.body}, ...)'
+      - pattern: Object.assign($U, req.body)
+      - pattern: $DOC.set(req.body)
+      - pattern: '$M.create({...req.body, ...})'
+      - pattern: '$M.create({data: req.body, ...})'
+      - pattern: '$M.update({..., data: req.body, ...})'
+
+  - id: js-sensitive-route-without-middleware
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Express route with a sensitive path registered with ONLY a handler (no
+      auth middleware). Verify it checks req.session/req.user inside;
+      otherwise it is a free flag endpoint.
+    metadata:
+      category: security
+      cwe: CWE-306
+      confidence: LOW
+      ad-impact: flag-leak
+    patterns:
+      - pattern-either:
+          - pattern: '$APP.$METHOD($PATH, ($REQ, $RES) => {...})'
+          - pattern: '$APP.$METHOD($PATH, async ($REQ, $RES) => {...})'
+          - pattern: '$APP.$METHOD($PATH, function ($REQ, $RES) {...})'
+          - pattern: '$APP.$METHOD($PATH, async function ($REQ, $RES) {...})'
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^(get|post|put|patch|delete|all)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: (?i).*(admin|flag|secret|internal|debug|export|backup|dump|config|all|delete).*
+      - pattern-not: |
+          $APP.$METHOD($PATH, ($REQ, $RES) => {
+            ...
+            <... $REQ.session ...>
+            ...
+          })
+      - pattern-not: |
+          $APP.$METHOD($PATH, async ($REQ, $RES) => {
+            ...
+            <... $REQ.session ...>
+            ...
+          })
+      - pattern-not: |
+          $APP.$METHOD($PATH, async ($REQ, $RES) => {
+            ...
+            <... $REQ.user ...>
+            ...
+          })
+      - pattern-not: |
+          $APP.$METHOD($PATH, ($REQ, $RES) => {
+            ...
+            <... $REQ.user ...>
+            ...
+          })
+
+  - id: js-ip-based-auth-spoofable
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      Access decision based on X-Forwarded-For / X-Real-IP / req.ip with
+      'trust proxy'. The header is client-controlled: send
+      "X-Forwarded-For: 127.0.0.1" to become "local admin".
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: req.headers["x-forwarded-for"]
+      - pattern: req.headers["x-real-ip"]
+      - pattern: req.header("X-Forwarded-For")
+      - pattern: req.header("x-forwarded-for")
+      - pattern: req.get("X-Forwarded-For")
+      - pattern: req.get("x-forwarded-for")
+      - pattern: $APP.set("trust proxy", true)
+
+  - id: js-cors-reflect-origin-with-credentials
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      CORS reflects any Origin while allowing credentials. Any website (or
+      attacker page visited by the checker bot) can read authenticated API
+      responses.
+    metadata:
+      category: security
+      cwe: CWE-942
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-either:
+      - pattern: 'cors({..., origin: true, ..., credentials: true, ...})'
+      - pattern: 'cors({..., credentials: true, ..., origin: true, ...})'
+      - pattern: $RES.setHeader("Access-Control-Allow-Origin", req.headers.origin)
+      - pattern: $RES.header("Access-Control-Allow-Origin", req.headers.origin)
+      - pattern: $RES.set("Access-Control-Allow-Origin", req.headers.origin)
+
+  - id: js-unsafe-buffer-allocation
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Buffer.allocUnsafe / new Buffer(n) return uninitialized memory that may
+      contain previous requests (other users' data, flags). Use Buffer.alloc.
+    metadata:
+      category: security
+      cwe: CWE-908
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: Buffer.allocUnsafe(...)
+      - pattern: Buffer.allocUnsafeSlow(...)
+      - pattern: new Buffer($N)
+
+  - id: js-weak-cipher
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      Weak/legacy crypto: createCipher (no IV, MD5 key derivation), ECB mode,
+      DES/RC4, or a hardcoded IV. Encrypted data/tokens can be forged or
+      decrypted. Use aes-256-gcm with a random IV.
+    metadata:
+      category: security
+      cwe: CWE-327
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: crypto.createCipher(...)
+      - pattern: crypto.createDecipher(...)
+      - patterns:
+          - pattern-either:
+              - pattern: crypto.createCipheriv($ALG, ...)
+              - pattern: crypto.createDecipheriv($ALG, ...)
+          - metavariable-regex:
+              metavariable: $ALG
+              regex: (?i).*(ecb|des|rc4|rc2|blowfish).*
+      - pattern: crypto.createCipheriv($ALG, $KEY, "...")
+      - pattern: crypto.createCipheriv($ALG, $KEY, Buffer.from("..."))
+      - pattern: crypto.createCipheriv($ALG, $KEY, Buffer.alloc($N))
+
+  - id: js-type-confusion-query-array
+    languages: [javascript, typescript]
+    severity: INFO
+    message: >
+      String method called on a raw query/body value. ?x[]=a&x[]=b turns it
+      into an array (or object with JSON bodies), which breaks length/
+      includes/indexOf/startsWith based checks. Validate typeof === "string".
+    metadata:
+      category: security
+      cwe: CWE-843
+      confidence: LOW
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: req.query.$P.length
+      - pattern: req.body.$P.length
+      - patterns:
+          - pattern-either:
+              - pattern: req.query.$P.$M(...)
+              - pattern: req.body.$P.$M(...)
+          - metavariable-regex:
+              metavariable: $M
+              regex: ^(includes|indexOf|startsWith|endsWith|match|toLowerCase|toUpperCase|trim)$
