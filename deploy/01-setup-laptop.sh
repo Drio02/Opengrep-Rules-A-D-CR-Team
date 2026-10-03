@@ -25,7 +25,7 @@ while [[ $# -gt 0 ]]; do
     --services-dir) SERVICES_DIR="${2:-}"; shift 2 ;;
     --no-services) FETCH=0; shift ;;
     --opengrep) WITH_OG=1; shift ;;
-    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR>1 && !/^#/{exit} NR>2{sub(/^# ?/,""); print}' "$0"; exit 0 ;;
     *) die "unknown option $1" "see --help" ;;
   esac
 done

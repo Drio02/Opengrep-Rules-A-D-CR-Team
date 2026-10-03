@@ -5,3 +5,6 @@ __pycache__/
 
 # competition settings (IPs, key paths): never commit
 deploy/competition.env
+
+# offline mode: verified opengrep binaries kept for exploiters without internet
+deploy/cache/

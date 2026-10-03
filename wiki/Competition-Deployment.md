@@ -49,6 +49,12 @@ servers. They are idempotent: when in doubt, run them again.
    | `REPO_BRANCH` | `ecsc2026/web-dashboard` until the PRs are merged, then `main` |
 
    The file is git-ignored. **Never commit keys or this file** (the repo is public).
+4. **While you still have internet**, prepare the offline kit (in case the
+   exploiter cannot reach GitHub during the game):
+
+   ```bash
+   deploy/02-deploy-exploiter.sh --prepare-offline   # verified opengrep kept in deploy/cache/
+   ```
 
 ## 1. Every team member: prepare the laptop
 
@@ -118,6 +124,21 @@ What it does on the exploiter (and nothing on the vulnbox):
 
 Expected end: **`Dashboard deployed.`** with the URL.
 
+**No internet on the exploiter?** Detected automatically (`OFFLINE=auto` in
+`competition.env`; force it with `--offline` / `--online`). Then the laptop
+uploads what the exploiter would download:
+
+- opengrep: from `deploy/cache/` (`--prepare-offline`), the laptop's own
+  opengrep or a download on the laptop; sha256 checked on both sides. If an
+  identical binary is already on the exploiter it is reused, no upload;
+- the rules repository: a git bundle of `REPO_BRANCH` from this clone (only
+  committed changes; keep the branch up to date with `git pull` beforehand).
+
+The first upload of opengrep (46 MB, not compressible) is slow over the VPN:
+about **15 minutes** at the ~50 KB/s measured in practice. Re-runs and
+`03-ops.sh update` only upload the repo bundle (a few hundred KB) and take
+under a minute.
+
 ## 3. First login and first analysis
 
 1. Open `http://<EXPLOITER_IP>:8765/` (from a laptop on the VPN).
@@ -140,7 +161,7 @@ after patches, *Resolved since the previous analysis* to confirm a fix.
 | Service state / URL | `deploy/03-ops.sh status` |
 | Logs (failed logins, blocked IPs, errors) | `deploy/03-ops.sh logs` (`logs -f` to follow) |
 | Restart (also re-applies the firewall) | `deploy/03-ops.sh restart` |
-| New rules / dashboard code pushed to `REPO_BRANCH` | `deploy/03-ops.sh update` |
+| New rules / dashboard code pushed to `REPO_BRANCH` | `deploy/03-ops.sh update` (no internet on the exploiter: uploads the branch of this clone; `git pull` it first) |
 | Services that were copied without git changed (on the exploiter) | `deploy/03-ops.sh sync` |
 | Update the service copies on my laptop | `deploy/03-ops.sh fetch` (`--refresh` to replace plain copies) |
 | Change port / allow / deny / branch | edit `competition.env`, run `02-deploy-exploiter.sh` again |
@@ -166,6 +187,9 @@ and prints the fix for every problem. Common cases:
 | `has Windows line endings` | env or key edited on Windows | `sed -i 's/\r$//' <file>` (`01 --key` does it for the key) |
 | `REMOTE HOST IDENTIFICATION HAS CHANGED` | machine reinstalled | `ssh-keygen -f ~/.ssh/known_hosts_ad -R <IP>` |
 | `port N is already used` | another program on the exploiter | change `DASH_PORT`, re-run `02` |
+| `no internet access to github.com` / download failed | exploiter cut off from the internet | `02-deploy-exploiter.sh --offline` (uploads opengrep + repo from the laptop) |
+| `no verified opengrep ... and no internet to download it` | offline mode, laptop without the binary and without internet | run `--prepare-offline` on a laptop that has internet, copy `deploy/cache/` over |
+| `uploading opengrep ...` seems stuck | slow VPN | wait (~15 min for 46 MB at 50 KB/s); it is done once |
 | `EXPLOITER_IP ... is not configured here` / `not inside TEAM_NET` | typo in `competition.env` | copy the IPs from the portal again |
 | `no key to reach the vulnbox from the exploiter` | `VULNBOX_KEY_ON_EXPLOITER` does not exist there | leave it empty (the team key is copied) or point it to the right key |
 | `... does not exist on the vulnbox` | different services path | set `VULNBOX_SERVICES_DIR` |

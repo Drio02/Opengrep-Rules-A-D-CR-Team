@@ -7,6 +7,8 @@
 #   deploy/03-ops.sh logs [-f]   last log lines of the dashboard (-f: follow)
 #   deploy/03-ops.sh restart     restart the dashboard (re-applies the firewall)
 #   deploy/03-ops.sh update      pull the latest rules/dashboard code + restart
+#                                (no internet on the exploiter: the branch is
+#                                uploaded from this clone; --offline / --online)
 #   deploy/03-ops.sh sync        refresh the service copies ON THE EXPLOITER
 #   deploy/03-ops.sh fetch [--refresh] [DIR]
 #                                copy / update the services on THIS laptop
@@ -21,7 +23,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 CMD="${1:-}"; shift || true
 case "$CMD" in
   doctor|status|logs|restart|update|sync|fetch|uninstall|purge) ;;
-  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) awk 'NR>1 && !/^#/{exit} NR>2{sub(/^# ?/,""); print}' "$0"; exit 1 ;;
 esac
 load_env
 URL="http://$EXPLOITER_IP:$DASH_PORT"
@@ -60,18 +62,18 @@ doctor)
   ;;
 status)
   need_exploiter
-  on_exploiter -n "systemctl --no-pager status ad-dashboard.service | head -12; echo; ss -ltnH 'sport = :$DASH_PORT'"
+  on_exploiter -n "systemctl --no-pager status $SERVICE_NAME.service | head -12; echo; ss -ltnH 'sport = :$DASH_PORT'"
   echo; echo "URL: $URL/"
   ;;
 logs)
   need_exploiter
-  if [[ "${1:-}" == -f ]]; then on_exploiter -t "journalctl -u ad-dashboard.service -f -o cat"
-  else on_exploiter -n "journalctl -u ad-dashboard.service --no-pager -n 80 -o cat"; fi
+  if [[ "${1:-}" == -f ]]; then on_exploiter -t "journalctl -u $SERVICE_NAME.service -f -o cat"
+  else on_exploiter -n "journalctl -u $SERVICE_NAME.service --no-pager -n 80 -o cat"; fi
   ;;
 restart)
   need_exploiter
   sudo=""; [[ "$EXPLOITER_USER" == root ]] || sudo="sudo -n"
-  on_exploiter -n "$sudo systemctl restart ad-dashboard.service && sleep 2 && systemctl is-active ad-dashboard.service"
+  on_exploiter -n "$sudo systemctl restart $SERVICE_NAME.service && sleep 2 && systemctl is-active $SERVICE_NAME.service"
   ;;
 fetch)
   refresh=""; dir="$LOCAL_SERVICES_DIR"
@@ -80,9 +82,18 @@ fetch)
   fetch_services "$dir" "$refresh"
   echo; [[ $FAILS -eq 0 ]] && echo "${C_OK}Done.${C_0}" || { echo "${C_ERR}$FAILS problem(s).${C_0}"; exit 2; }
   ;;
-update|sync)
+update)
   need_exploiter
-  run_remote "$CMD"
+  [[ "${1:-}" == --offline ]] && OFFLINE=yes
+  [[ "${1:-}" == --online ]] && OFFLINE=no
+  decide_offline
+  [[ $OFFLINE_ACTIVE -eq 1 ]] && prepare_offline repo-only
+  rc=0; run_remote update || rc=$?
+  cleanup_uploads; exit $rc
+  ;;
+sync)
+  need_exploiter
+  run_remote sync
   ;;
 uninstall|purge)
   need_exploiter

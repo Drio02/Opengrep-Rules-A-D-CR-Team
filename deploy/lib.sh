@@ -26,7 +26,8 @@ die()  { fail "$1"; [[ -n "${2:-}" ]] && fix "$2"; exit 1; }
 
 VARS=(TEAM_NET VULNBOX_IP EXPLOITER_IP TEAM_KEY VULNBOX_USER EXPLOITER_USER VULNBOX_SERVICES_DIR
       VULNBOX_KEY_ON_EXPLOITER GIT_SERVER_IP GIT_SERVER_USER DASH_PORT DASH_ALLOW DASH_DENY DASH_USER
-      REPO_URL REPO_BRANCH OPENGREP_VERSION OPENGREP_SHA256 VULNBOX_KEY_UPLOADED)
+      REPO_URL REPO_BRANCH OPENGREP_VERSION OPENGREP_SHA256 VULNBOX_KEY_UPLOADED
+      OFFLINE_ACTIVE OPENGREP_UPLOADED OPENGREP_REMOTE_SRC REPO_BUNDLE)
 
 load_env() {
   ENV_FILE="${ENV_FILE:-$DEPLOY_DIR/competition.env}"
@@ -46,6 +47,10 @@ load_env() {
   VULNBOX_KEY_ON_EXPLOITER="${VULNBOX_KEY_ON_EXPLOITER:-}"; GIT_SERVER_IP="${GIT_SERVER_IP:-}"
   OPENGREP_VERSION="${OPENGREP_VERSION:-1.30.0}"; OPENGREP_SHA256="${OPENGREP_SHA256:-}"
   REPO_BRANCH="${REPO_BRANCH:-main}"
+  OFFLINE="${OFFLINE:-auto}"; OFFLINE_ACTIVE=0; OPENGREP_UPLOADED=""; OPENGREP_REMOTE_SRC=""; REPO_BUNDLE=""
+  # systemd unit name: same rule as deploy/remote/exploiter.sh
+  if [[ "$DASH_USER" == addash ]]; then SERVICE_NAME=ad-dashboard; else SERVICE_NAME="ad-dashboard-$DASH_USER"; fi
+  export SERVICE_NAME
   TEAM_KEY="${TEAM_KEY/#\~/$HOME}"
   VULNBOX_KEY_UPLOADED="${VULNBOX_KEY_UPLOADED:-}"
   SSH_KEY_OPTS=(-i "$TEAM_KEY" -o IdentitiesOnly=yes)
@@ -198,4 +203,110 @@ fetch_services() {
       fi
     fi
   done <<<"$list"
+}
+
+# ---------------------------------------------------------------------
+# Offline mode: the exploiter has no internet, so opengrep and the rules
+# repository are uploaded from this laptop.
+# ---------------------------------------------------------------------
+OFFLINE_CACHE="$DEPLOY_DIR/cache"     # git-ignored
+
+# decide_offline: sets OFFLINE_ACTIVE from OFFLINE (auto|yes|no) / the exploiter
+# shellcheck disable=SC2034  # OFFLINE_ACTIVE is read by the calling scripts
+decide_offline() {
+  case "${OFFLINE:-auto}" in
+    yes|1|true)  OFFLINE_ACTIVE=1; ok "offline mode (forced): files are uploaded from this laptop" ;;
+    no|0|false)  OFFLINE_ACTIVE=0 ;;
+    *)
+      if on_exploiter -n "curl -s -o /dev/null --max-time 8 https://github.com" 2>/dev/null; then
+        OFFLINE_ACTIVE=0; ok "the exploiter has internet: it downloads opengrep and the repo itself"
+      else
+        OFFLINE_ACTIVE=1; warn "the exploiter has NO internet: offline mode, files are uploaded from this laptop"
+      fi ;;
+  esac
+}
+
+# opengrep_asset ARCH -> release asset name
+opengrep_asset() {
+  case "$1" in
+    x86_64) echo opengrep_manylinux_x86 ;;
+    aarch64|arm64) echo opengrep_manylinux_aarch64 ;;
+    *) return 1 ;;
+  esac
+}
+
+# verified_opengrep ASSET [download]: prints a local path to a verified
+# binary (cache, then the laptop's own opengrep, then download if allowed)
+verified_opengrep() {
+  local asset="$1" allow_dl="${2:-}" cache="$OFFLINE_CACHE/opengrep-$OPENGREP_VERSION-$1" cand
+  sha_ok() { [[ -z "$OPENGREP_SHA256" || "$asset" != opengrep_manylinux_x86 ]] \
+             || [[ "$(sha256sum "$1" | cut -d' ' -f1)" == "$OPENGREP_SHA256" ]]; }
+  if [[ -f "$cache" ]] && sha_ok "$cache"; then echo "$cache"; return 0; fi
+  if [[ "$asset" == opengrep_manylinux_x86 && "$(uname -m)" == x86_64 ]]; then
+    for cand in "$(command -v opengrep 2>/dev/null || true)" "$HOME/.local/bin/opengrep"; do
+      [[ -n "$cand" && -x "$cand" ]] || continue
+      cand="$(readlink -f "$cand")"
+      if [[ "$("$cand" --version 2>/dev/null)" == "$OPENGREP_VERSION" ]] && sha_ok "$cand"; then
+        mkdir -p "$OFFLINE_CACHE"; cp "$cand" "$cache"; echo "$cache"; return 0
+      fi
+    done
+  fi
+  [[ "$allow_dl" == download ]] || return 1
+  mkdir -p "$OFFLINE_CACHE"
+  curl -fsSL -o "$cache.part" "https://github.com/opengrep/opengrep/releases/download/v$OPENGREP_VERSION/$asset" \
+    || { rm -f "$cache.part"; return 1; }
+  if ! sha_ok "$cache.part"; then rm -f "$cache.part"; return 1; fi
+  mv "$cache.part" "$cache"; echo "$cache"
+}
+
+# prepare_offline [repo-only]: uploads opengrep (unless repo-only) and a git
+# bundle of REPO_BRANCH to the exploiter; sets OPENGREP_UPLOADED / REPO_BUNDLE
+prepare_offline() {
+  local arch asset bin bundle behind
+  step "offline mode: preparing files on this laptop"
+  if [[ "${1:-}" != repo-only ]]; then
+    arch=$(on_exploiter -n uname -m) || die "cannot read the CPU type of the exploiter"
+    asset=$(opengrep_asset "$arch") || die "unsupported exploiter CPU: $arch"
+    bin=$(verified_opengrep "$asset" download) \
+      || die "no verified opengrep $OPENGREP_VERSION ($asset) on this laptop and no internet to download it" \
+             "while you have internet: deploy/02-deploy-exploiter.sh --prepare-offline"
+    ok "opengrep $OPENGREP_VERSION for $arch: $bin"
+    # the same binary may already be on the exploiter (re-run, other instance): no upload
+    local want find_cmd
+    want=$(sha256sum "$bin" | cut -d' ' -f1)
+    find_cmd='for p in /home/*/.local/bin/opengrep /root/.local/bin/opengrep /usr/local/bin/opengrep; do
+      [ -f "$p" ] && [ "$(sha256sum "$p" | cut -d" " -f1)" = "'"$want"'" ] && { echo "$p"; break; }; done; true'
+    OPENGREP_REMOTE_SRC=$(on_exploiter -n "$find_cmd" 2>/dev/null || true)
+    if [[ -n "$OPENGREP_REMOTE_SRC" ]]; then
+      ok "identical opengrep already on the exploiter ($OPENGREP_REMOTE_SRC): no upload needed"; bin=""
+    fi
+  fi
+  git -C "$REPO_DIR" rev-parse -q --verify "refs/heads/$REPO_BRANCH" >/dev/null \
+    || die "branch $REPO_BRANCH is not checked out in this clone ($REPO_DIR)" "git -C $REPO_DIR checkout $REPO_BRANCH"
+  git -C "$REPO_DIR" cat-file -e "$REPO_BRANCH:webapp/server.py" 2>/dev/null \
+    || die "branch $REPO_BRANCH has no webapp/server.py" "use REPO_BRANCH=ecsc2026/web-dashboard (or main once merged)"
+  if git -C "$REPO_DIR" rev-parse -q --verify "refs/remotes/origin/$REPO_BRANCH" >/dev/null; then
+    behind=$(git -C "$REPO_DIR" rev-list --count "$REPO_BRANCH..origin/$REPO_BRANCH")
+    [[ "$behind" -eq 0 ]] || warn "your local $REPO_BRANCH is $behind commit(s) behind origin (git pull while you have internet)"
+  fi
+  bundle=$(mktemp); git -C "$REPO_DIR" bundle create "$bundle" "$REPO_BRANCH" 2>/dev/null \
+    || { rm -f "$bundle"; die "git bundle of $REPO_BRANCH failed"; }
+  ok "repository: $(git -C "$REPO_DIR" log --oneline -1 "$REPO_BRANCH") ($(du -h "$bundle" | cut -f1) bundle)"
+  [[ -n "$(git -C "$REPO_DIR" status --porcelain 2>/dev/null)" ]] \
+    && warn "uncommitted changes in this clone are NOT uploaded (only commits of $REPO_BRANCH)"
+  REPO_BUNDLE="/tmp/ad-repo-$$.bundle"
+  on_exploiter "umask 077; cat > $REPO_BUNDLE" < "$bundle"; rm -f "$bundle"
+  if [[ -n "${bin:-}" ]]; then
+    warn "uploading opengrep ($(du -h "$bin" | cut -f1)): over a slow VPN this takes minutes (practice VPN: ~15 min at 50 KB/s)"
+    OPENGREP_UPLOADED="/tmp/ad-opengrep-$$"
+    on_exploiter "umask 077; cat > $OPENGREP_UPLOADED" < "$bin"
+  fi
+  ok "uploaded to the exploiter (deleted there after installing)"
+}
+
+cleanup_uploads() {
+  local up
+  for up in "${VULNBOX_KEY_UPLOADED:-}" "${OPENGREP_UPLOADED:-}" "${REPO_BUNDLE:-}"; do
+    [[ -n "$up" ]] && on_exploiter -n "rm -f '$up'" 2>/dev/null || true
+  done
 }
