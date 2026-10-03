@@ -5,6 +5,11 @@
 set -euo pipefail
 
 DEPLOY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="$(cd "$DEPLOY_DIR/.." && pwd)"
+# default place for the local service copies: next to this repository
+# (never inside it: the repo is public and must not get service code)
+LOCAL_SERVICES_DIR="$(cd "$REPO_DIR/.." && pwd)"
+export REPO_DIR LOCAL_SERVICES_DIR
 
 if [[ -t 1 ]]; then
   C_OK=$'\e[32m'; C_ERR=$'\e[31m'; C_WARN=$'\e[33m'; C_B=$'\e[1m'; C_0=$'\e[0m'
@@ -123,4 +128,74 @@ run_remote() {
   { env_header; printf 'export MODE=%q\n' "$mode"; cat "$DEPLOY_DIR/remote/exploiter.sh"; } \
     | on_exploiter "umask 077; cat > $tmp"
   on_exploiter -n "$sudo bash $tmp; rc=\$?; rm -f $tmp; exit \$rc"
+}
+
+# Command (for the vulnbox) that streams a tar of one service. Live services
+# change while they are read (checker, attacks, cleanup jobs): tar exit code 1
+# ("file changed / removed as we read it") is only a warning, so it counts as
+# success; 2 and above are real errors.
+remote_tar() {
+  printf "tar --ignore-failed-read --warning=no-file-changed --warning=no-file-removed -C '%s' --exclude=node_modules -cf - '%s'; rc=\$?; [ \$rc -le 1 ] || exit \$rc" \
+    "$VULNBOX_SERVICES_DIR" "$1"
+}
+
+# fetch_services DEST [refresh]
+# Read-only copy of every service of the vulnbox into DEST, on this laptop:
+#   - service dir is a git repo on the vulnbox -> git clone (re-run: fast-forward)
+#   - otherwise -> tar copy; an existing copy is NEVER overwritten (it may hold
+#     your patches) unless "refresh" is given, and then the old one is kept as
+#     <name>.bak-<timestamp>
+fetch_services() {
+  local dest="$1" refresh="${2:-}" list kind name tmp stamp git_ssh
+  dest="$(realpath -m "$dest")"
+  if [[ "$dest/" == "$REPO_DIR/"* ]]; then
+    die "refusing to copy services inside the rules repository ($dest)" \
+        "use a folder outside $REPO_DIR (default: $LOCAL_SERVICES_DIR)"
+  fi
+  mkdir -p "$dest"
+  rc=0; list=$(on_vulnbox -n "cd '$VULNBOX_SERVICES_DIR' && for d in */; do d=\${d%/}; [ -d \"\$d/.git\" ] && printf 'git\t%s\n' \"\$d\" || printf 'copy\t%s\n' \"\$d\"; done" 2>&1) || rc=$?
+  if [[ $rc -ne 0 ]]; then fail "cannot list $VULNBOX_SERVICES_DIR on the vulnbox: $(tail -1 <<<"$list")"; fix "$(ssh_hint "$list")"; return 0; fi
+  [[ -n "$list" ]] || { warn "no services in $VULNBOX_SERVICES_DIR yet"; return 0; }
+  # ssh for git: same key / options as the scripts, also stored in each clone
+  git_ssh="ssh -F none -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile='$HOME/.ssh/known_hosts_ad' -i '$TEAM_KEY' -o IdentitiesOnly=yes"
+  stamp=$(date +%Y%m%d-%H%M%S)
+  while IFS=$'\t' read -r kind name; do
+    [[ -n "$name" ]] || continue
+    if [[ ! "$name" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      warn "skipping service directory with an unsafe name: $(printf '%q' "$name")"; continue
+    fi
+    if [[ "$kind" == git ]]; then
+      if [[ -d "$dest/$name/.git" ]]; then
+        if GIT_SSH_COMMAND="$git_ssh" git -C "$dest/$name" pull -q --ff-only </dev/null 2>/dev/null; then
+          ok "$name: up to date ($(git -C "$dest/$name" branch --show-current) @ $(git -C "$dest/$name" log -1 --format=%h))"
+        else
+          warn "$name: not updated (local changes, local commits or another branch) - left as is"
+        fi
+      elif [[ -e "$dest/$name" ]]; then
+        warn "$name: $dest/$name exists and is not a git clone - left as is (move it away to clone)"
+      elif GIT_SSH_COMMAND="$git_ssh" git clone -q "$VULNBOX_USER@$VULNBOX_IP:$VULNBOX_SERVICES_DIR/$name" "$dest/$name" </dev/null; then
+        git -C "$dest/$name" config core.sshCommand "$git_ssh"
+        ok "$name: cloned (git)"
+      else
+        fail "$name: git clone failed"
+      fi
+    else
+      if [[ -e "$dest/$name" && "$refresh" != refresh ]]; then
+        ok "$name: copy already present - kept (refresh: deploy/03-ops.sh fetch --refresh)"
+        continue
+      fi
+      tmp="$dest/.$name.fetch"
+      rm -rf "${tmp:?}"; mkdir -p "$tmp"
+      if on_vulnbox -n "$(remote_tar "$name")" 2>"$tmp.err" | tar -C "$tmp" -xf - 2>>"$tmp.err"; then
+        rm -f "$tmp.err"
+        if [[ -e "$dest/$name" ]]; then mv "$dest/$name" "$dest/$name.bak-$stamp"; warn "$name: previous copy kept as $name.bak-$stamp"; fi
+        mv "$tmp/$name" "$dest/$name"; rm -rf "${tmp:?}"
+        ok "$name: copied (no git on the vulnbox)"
+      else
+        fail "$name: copy failed: $(grep -v '^$' "$tmp.err" | tail -1)"
+        case "$dest" in /mnt/*) fix "special file names do not fit on a Windows drive: copy into a folder inside WSL (--services-dir ~/services)";; esac
+        rm -rf "${tmp:?}" "$tmp.err"
+      fi
+    fi
+  done <<<"$list"
 }

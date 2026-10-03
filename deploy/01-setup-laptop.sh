@@ -6,21 +6,26 @@
 #   deploy/01-setup-laptop.sh                                   # re-check
 #
 # Installs the team SSH key, writes ~/.ssh/config entries (vulnbox,
-# exploiter, optional gitserver) and tests VPN + SSH, explaining how to
-# fix whatever fails. Safe to run again at any time.
+# exploiter, optional gitserver), tests VPN + SSH (explaining how to fix
+# whatever fails) and copies the services of the vulnbox, read-only, next
+# to this repository (its parent folder). Safe to run again at any time.
 #
 # Options:
-#   --key FILE    install FILE as TEAM_KEY (CRLF stripped, chmod 600)
-#   --opengrep    also install opengrep locally (for scan.sh / scan-bulk.sh)
+#   --key FILE           install FILE as TEAM_KEY (CRLF stripped, chmod 600)
+#   --services-dir DIR   where to copy the services (default: parent folder of the repo)
+#   --no-services        do not copy the services
+#   --opengrep           also install opengrep locally (for scan.sh / scan-bulk.sh)
 # ---------------------------------------------------------------------
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-KEY_IN=""; WITH_OG=0
+KEY_IN=""; WITH_OG=0; FETCH=1; SERVICES_DIR="$LOCAL_SERVICES_DIR"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --key) KEY_IN="${2:-}"; shift 2 ;;
+    --services-dir) SERVICES_DIR="${2:-}"; shift 2 ;;
+    --no-services) FETCH=0; shift ;;
     --opengrep) WITH_OG=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "unknown option $1" "see --help" ;;
   esac
 done
@@ -102,17 +107,27 @@ for target in "vulnbox $VULNBOX_IP" "exploiter $EXPLOITER_IP"; do
 done
 
 step "SSH logins"
+VULNBOX_OK=0
 for target in vulnbox exploiter; do
   rc=0
   if [[ $target == vulnbox ]]; then out=$(on_vulnbox -n 'echo "$(whoami)@$(hostname)"' 2>&1) || rc=$?
   else out=$(on_exploiter -n 'echo "$(whoami)@$(hostname)"' 2>&1) || rc=$?; fi
-  if [[ $rc -eq 0 ]]; then ok "$target: logged in as $(tail -1 <<<"$out")"
+  if [[ $rc -eq 0 ]]; then ok "$target: logged in as $(tail -1 <<<"$out")"; [[ $target == vulnbox ]] && VULNBOX_OK=1
   else fail "$target: $(tail -1 <<<"$out")"; fix "$(ssh_hint "$out")"; fi
 done
 if [[ -n "$GIT_SERVER_IP" ]]; then
   if out=$(ssh -n "${SSH_COMMON[@]}" "${SSH_KEY_OPTS[@]}" "$GIT_SERVER_USER@$GIT_SERVER_IP" true 2>&1); then ok "gitserver: login works"
   else warn "gitserver: $(tail -1 <<<"$out") (only needed to clone/push team repos)"
        fix "add $TEAM_KEY.pub to ~$GIT_SERVER_USER/.ssh/authorized_keys on $GIT_SERVER_IP"; fi
+fi
+
+if [[ $FETCH -eq 1 ]]; then
+  step "local copy of the services ($(realpath -m "$SERVICES_DIR"))"
+  if [[ $VULNBOX_OK -eq 1 ]]; then
+    fetch_services "$SERVICES_DIR"
+  else
+    warn "skipped: no SSH access to the vulnbox (fix the items above and run again)"
+  fi
 fi
 
 if [[ $WITH_OG -eq 1 ]]; then

@@ -7,7 +7,12 @@
 #   deploy/03-ops.sh logs [-f]   last log lines of the dashboard (-f: follow)
 #   deploy/03-ops.sh restart     restart the dashboard (re-applies the firewall)
 #   deploy/03-ops.sh update      pull the latest rules/dashboard code + restart
-#   deploy/03-ops.sh sync        refresh the service copies from the vulnbox
+#   deploy/03-ops.sh sync        refresh the service copies ON THE EXPLOITER
+#   deploy/03-ops.sh fetch [--refresh] [DIR]
+#                                copy / update the services on THIS laptop
+#                                (default DIR: parent folder of the repo; git
+#                                clones are fast-forwarded, plain copies are
+#                                only replaced with --refresh, old one kept .bak)
 #   deploy/03-ops.sh uninstall   remove service + firewall rule (keeps labels)
 #   deploy/03-ops.sh purge       uninstall + delete user, labels and copies
 # ---------------------------------------------------------------------
@@ -15,8 +20,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 CMD="${1:-}"; shift || true
 case "$CMD" in
-  doctor|status|logs|restart|update|sync|uninstall|purge) ;;
-  *) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  doctor|status|logs|restart|update|sync|fetch|uninstall|purge) ;;
+  *) sed -n '2,19p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac
 load_env
 URL="http://$EXPLOITER_IP:$DASH_PORT"
@@ -67,6 +72,13 @@ restart)
   need_exploiter
   sudo=""; [[ "$EXPLOITER_USER" == root ]] || sudo="sudo -n"
   on_exploiter -n "$sudo systemctl restart ad-dashboard.service && sleep 2 && systemctl is-active ad-dashboard.service"
+  ;;
+fetch)
+  refresh=""; dir="$LOCAL_SERVICES_DIR"
+  for a in "$@"; do [[ "$a" == --refresh ]] && refresh=refresh || dir="$a"; done
+  step "services of $VULNBOX_IP -> $(realpath -m "$dir") (read-only on the vulnbox)"
+  fetch_services "$dir" "$refresh"
+  echo; [[ $FAILS -eq 0 ]] && echo "${C_OK}Done.${C_0}" || { echo "${C_ERR}$FAILS problem(s).${C_0}"; exit 2; }
   ;;
 update|sync)
   need_exploiter

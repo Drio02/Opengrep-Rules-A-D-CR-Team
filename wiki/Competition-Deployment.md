@@ -23,9 +23,11 @@ servers. They are idempotent: when in doubt, run them again.
 ## 0. The day before (or as soon as the portal shows the network)
 
 1. VPN: import the WireGuard config of the competition and **Activate** it.
-2. On the laptop (WSL terminal):
+2. On the laptop (WSL terminal), in a folder of its own (the services will be
+   copied next to the repository):
 
    ```bash
+   mkdir -p ~/compe && cd ~/compe
    git clone https://github.com/Drio02/Opengrep-Rules-A-D-CR-Team.git
    cd Opengrep-Rules-A-D-CR-Team
    git checkout ecsc2026/web-dashboard        # or main once the PRs are merged
@@ -55,10 +57,41 @@ deploy/01-setup-laptop.sh --key /path/to/team_private_key   # first time
 deploy/01-setup-laptop.sh                                   # later: re-check only
 ```
 
-It installs the key in `TEAM_KEY` (fixes Windows line endings and permissions),
-adds `vulnbox` / `exploiter` entries to `~/.ssh/config` (so `ssh vulnbox` works),
-and checks VPN + SSH. Expected end: **`Laptop ready.`** Anything marked `[FAIL]`
-comes with a `->` line telling you what to do.
+The key file: copy the team private key from the A&D dashboard of the
+competition into a file (e.g. `nano ~/team.key`, or the file downloaded to
+`/mnt/c/Users/<you>/Downloads/`) and pass it with `--key`. The script copies it
+to `TEAM_KEY`; delete the original afterwards.
+
+It then:
+
+1. installs the key in `TEAM_KEY` (fixes Windows line endings and permissions);
+2. adds `vulnbox` / `exploiter` entries to `~/.ssh/config` (so `ssh vulnbox`
+   works by hand; the deploy scripts do not need them);
+3. checks VPN + SSH;
+4. **copies the services of the vulnbox next to this repository** (its parent
+   folder), read-only on the vulnbox:
+
+   ```
+   ~/compe/
+   ├── Opengrep-Rules-A-D-CR-Team/   <- run the scripts from here
+   ├── service1/                     <- git clone when the vulnbox dir is a git repo
+   └── service2/                     <- plain copy otherwise
+   ```
+
+   Running it again fast-forwards the git clones (never over local changes)
+   and **keeps** existing plain copies (your patches). `--services-dir DIR`
+   changes the folder, `--no-services` skips it, and
+   `deploy/03-ops.sh fetch [--refresh] [DIR]` updates the copies later
+   (`--refresh` replaces plain copies, keeping the old one as `<name>.bak-<time>`).
+   Keep this folder inside WSL (e.g. `~/compe`): service data may have file
+   names that do not fit on a Windows drive.
+
+Expected end: **`Laptop ready.`** Anything marked `[FAIL]` comes with a `->`
+line telling you what to do.
+
+Who needs this step: whoever runs `02` / `03` or will SSH into the machines
+to patch. Teammates who only use the dashboard in the browser just need the
+VPN.
 
 Optional: `--opengrep` installs opengrep locally (for `scripts/scan.sh` and
 `scripts/scan-bulk.sh` on the laptop).
@@ -108,7 +141,8 @@ after patches, *Resolved since the previous analysis* to confirm a fix.
 | Logs (failed logins, blocked IPs, errors) | `deploy/03-ops.sh logs` (`logs -f` to follow) |
 | Restart (also re-applies the firewall) | `deploy/03-ops.sh restart` |
 | New rules / dashboard code pushed to `REPO_BRANCH` | `deploy/03-ops.sh update` |
-| Services that were copied without git changed | `deploy/03-ops.sh sync` |
+| Services that were copied without git changed (on the exploiter) | `deploy/03-ops.sh sync` |
+| Update the service copies on my laptop | `deploy/03-ops.sh fetch` (`--refresh` to replace plain copies) |
 | Change port / allow / deny / branch | edit `competition.env`, run `02-deploy-exploiter.sh` again |
 | Remove it (keeps labels and copies) | `deploy/03-ops.sh uninstall` |
 | Remove everything, including labels | `deploy/03-ops.sh purge` |
