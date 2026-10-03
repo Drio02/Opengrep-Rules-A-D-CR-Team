@@ -9,12 +9,19 @@ rules:
     category: security
     cwe: CWE-79
     confidence: HIGH
-  pattern-either:
-  - pattern: $EL.innerHTML = $X
-  - pattern: $EL.outerHTML = $X
-  - pattern: $EL.insertAdjacentHTML($POS, $X)
-  - pattern: document.write($X)
-  - pattern: document.writeln($X)
+  patterns:
+  - pattern-either:
+    - pattern: $EL.innerHTML = $X
+    - pattern: $EL.outerHTML = $X
+    - pattern: $EL.insertAdjacentHTML($POS, $X)
+    - pattern: document.write($X)
+    - pattern: document.writeln($X)
+  # constant markup (clearing a log, fixed message) is not attacker controlled
+  - pattern-not: $EL.innerHTML = "..."
+  - pattern-not: $EL.outerHTML = "..."
+  - pattern-not: $EL.insertAdjacentHTML($POS, "...")
+  - pattern-not: document.write("...")
+  - pattern-not: document.writeln("...")
 - id: jsfe-xss-react-dangerous
   languages:
   - generic
