@@ -117,6 +117,21 @@ rules:
           $L = read($FD, $B, sizeof($B));
           ...
           $B[$L] = $X;
+      # n = read(fd, note, NOTE_SIZE); note[n] = 0;  -> one past a full read
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  $L = read($FD, $B, $N);
+                  ...
+                  $B[$L] = $X;
+              - pattern: |
+                  $T $L = read($FD, $B, $N);
+                  ...
+                  $B[$L] = $X;
+          # read(fd, buf, size - 1) leaves room for the terminator
+          - metavariable-regex:
+              metavariable: $N
+              regex: ^(?!.*-\s*1\s*$)
       - pattern: strncat($D, $S, sizeof($D))
 
   - id: c-strncpy-no-terminator
@@ -153,34 +168,44 @@ rules:
       cwe: CWE-134
       confidence: HIGH
       ad-impact: rce
-    pattern-either:
-      - patterns:
-          - pattern-either:
-              - pattern: printf($FMT)
-              - pattern: printf($FMT, ...)
-              - pattern: vprintf($FMT, ...)
-              - pattern: wprintf($FMT, ...)
-          - pattern-not: printf("...", ...)
-          - pattern-not: vprintf("...", ...)
-          - pattern-not: wprintf("...", ...)
-      - patterns:
-          - pattern-either:
-              - pattern: fprintf($F, $FMT, ...)
-              - pattern: dprintf($F, $FMT, ...)
-              - pattern: vfprintf($F, $FMT, ...)
-              - pattern: syslog($P, $FMT, ...)
-          - pattern-not: fprintf($F, "...", ...)
-          - pattern-not: dprintf($F, "...", ...)
-          - pattern-not: vfprintf($F, "...", ...)
-          - pattern-not: syslog($P, "...", ...)
-      - patterns:
-          - pattern-either:
-              - pattern: sprintf($D, $FMT, ...)
-              - pattern: snprintf($D, $N, $FMT, ...)
-              - pattern: vsnprintf($D, $N, $FMT, ...)
-          - pattern-not: sprintf($D, "...", ...)
-          - pattern-not: snprintf($D, $N, "...", ...)
-          - pattern-not: vsnprintf($D, $N, "...", ...)
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern-either:
+                  - pattern: printf($FMT)
+                  - pattern: printf($FMT, ...)
+                  - pattern: vprintf($FMT, ...)
+                  - pattern: wprintf($FMT, ...)
+              - pattern-not: printf("...", ...)
+              - pattern-not: vprintf("...", ...)
+              - pattern-not: wprintf("...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: fprintf($F, $FMT, ...)
+                  - pattern: dprintf($F, $FMT, ...)
+                  - pattern: vfprintf($F, $FMT, ...)
+                  - pattern: syslog($P, $FMT, ...)
+              - pattern-not: fprintf($F, "...", ...)
+              - pattern-not: dprintf($F, "...", ...)
+              - pattern-not: vfprintf($F, "...", ...)
+              - pattern-not: syslog($P, "...", ...)
+          - patterns:
+              - pattern-either:
+                  - pattern: sprintf($D, $FMT, ...)
+                  - pattern: snprintf($D, $N, $FMT, ...)
+                  - pattern: vsnprintf($D, $N, $FMT, ...)
+              - pattern-not: sprintf($D, "...", ...)
+              - pattern-not: snprintf($D, $N, "...", ...)
+              - pattern-not: vsnprintf($D, $N, "...", ...)
+      # format is a #define'd literal: snprintf(buf, n, STORAGE_DIR, user)
+      - metavariable-regex:
+          metavariable: $FMT
+          regex: ^(?![A-Z][A-Z0-9_]*$)
+      # a variadic wrapper (die/aprintf/log) forwarding its own format
+      # parameter: va_start(ap, fmt); vprintf(fmt, ap). Check the callers.
+      - pattern-not-inside: |
+          va_start($AP, $FMT);
+          ...
 
   # -------------------------------------------------------------------
   # Heap lifetime
@@ -234,6 +259,20 @@ rules:
           free($P);
           ...
           $P = $X;
+          ...
+      # goto-cleanup layout: "exit: free(p); return st; fail: if (p) remove(p);"
+      # the use sits after the function's return, only reachable via goto
+      - pattern-not-inside: |
+          free($P);
+          ...
+          return $RET;
+          $LABEL:
+          ...
+      - pattern-not-inside: |
+          free($P);
+          ...
+          return $RET;
+          $LABEL: $STMT;
           ...
 
   - id: c-malloc-multiplication-overflow
@@ -441,3 +480,83 @@ rules:
       - pattern-not: |
           if ($LEN < 0 || $LEN > $MAX) { ... }
           ...
+
+  # -------------------------------------------------------------------
+  # Integer / sign confusion
+  # -------------------------------------------------------------------
+  - id: c-char-eof-comparison
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      fgetc()/getc()/getchar() result stored in a 'char' and compared with
+      EOF. A 0xff byte becomes -1 == EOF, so attacker data can end a string
+      early and control the fields that are read after it (e.g. a hash or
+      owner id stored next to a user-chosen name). Patch: declare the
+      variable as int.
+    metadata:
+      category: security
+      cwe: CWE-197
+      confidence: HIGH
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              char $C;
+              ...
+          - pattern-inside: |
+              signed char $C;
+              ...
+          - pattern-inside: |
+              unsigned char $C;
+              ...
+      - pattern-either:
+          - pattern: ($C = fgetc(...)) != EOF
+          - pattern: ($C = fgetc(...)) == EOF
+          - pattern: ($C = getc(...)) != EOF
+          - pattern: ($C = getc(...)) == EOF
+          - pattern: ($C = getchar()) != EOF
+          - pattern: ($C = getchar()) == EOF
+
+  - id: c-sprintf-hex-signed-char
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      A plain/signed char is formatted with %x/%02x. Bytes >= 0x80 are
+      sign-extended and printed as "ffffff80" (8 chars, not 2), so a buffer
+      sized for 2 hex chars per byte overflows into the next globals (e.g. a
+      'loggedin' flag). Patch: cast to (unsigned char) / uint8_t or mask
+      with & 0xff.
+    metadata:
+      category: security
+      cwe: CWE-787
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $RET $FN(..., const char *$S, ...) { ... }
+          - pattern-inside: |
+              $RET $FN(..., char *$S, ...) { ... }
+          - pattern-inside: |
+              $RET *$FN(..., const char *$S, ...) { ... }
+          - pattern-inside: |
+              $RET *$FN(..., char *$S, ...) { ... }
+          - pattern-inside: |
+              char $S[$N];
+              ...
+          - pattern-inside: |
+              char *$S;
+              ...
+          - pattern-inside: |
+              char *$S = $INIT;
+              ...
+      - pattern-either:
+          - pattern: sprintf($D, $FMT, ..., <... $S[$I] ...>, ...)
+          - pattern: snprintf($D, $SZ, $FMT, ..., <... $S[$I] ...>, ...)
+      - metavariable-regex:
+          metavariable: $FMT
+          regex: '^".*%[-+0-9. #]*[hl]*[xX].*"$'
+      - pattern-not: sprintf($D, $FMT, ..., <... ($CAST) $S[$I] ...>, ...)
+      - pattern-not: snprintf($D, $SZ, $FMT, ..., <... ($CAST) $S[$I] ...>, ...)
+      - pattern-not: sprintf($D, $FMT, ..., <... $E & 0xff ...>, ...)
+      - pattern-not: snprintf($D, $SZ, $FMT, ..., <... $E & 0xff ...>, ...)

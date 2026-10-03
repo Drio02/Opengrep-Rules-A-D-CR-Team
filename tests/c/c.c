@@ -125,3 +125,96 @@ void copy(char *dst, char *src) {
     }
     memcpy(dst, src, len);
 }
+
+void freadstr(FILE *f, char **dst) {
+    size_t start, len;
+    char c;
+
+    start = ftell(f);
+    // ruleid: c-char-eof-comparison
+    for (len = 0; (c = fgetc(f)) != EOF && c; len++);
+    fseek(f, start, SEEK_SET);
+}
+
+void freadstr_fixed(FILE *f) {
+    size_t len;
+    int c;
+    // ok: c-char-eof-comparison
+    for (len = 0; (c = fgetc(f)) != EOF && c; len++);
+}
+
+const char *mhash(const char *str, int len) {
+    static char buf[41];
+    char *bp;
+    int i;
+    for (bp = buf, i = 0; i < 20; i++)
+        // ruleid: c-sprintf-hex-signed-char, c-unbounded-string-copy, c-weak-rand-token
+        bp += sprintf(bp, "%02x", str[i % len] ^ (rand() % 256));
+    for (bp = buf, i = 0; i < 20; i++)
+        // ok: c-sprintf-hex-signed-char
+        bp += snprintf(bp, 3, "%02x", (unsigned char) str[i % len]);
+    return buf;
+}
+
+void load_note(char **notes, long idx, int filefd) {
+    // ruleid: c-off-by-one-null-terminator
+    int bytes_read = read(filefd, notes[idx], 0x60);
+    notes[idx][bytes_read] = 0;
+}
+
+void load_passwd(int fd) {
+    char password_buf[40];
+    // ok: c-off-by-one-null-terminator
+    int bytes_read = read(fd, password_buf, sizeof(password_buf) - 1);
+    password_buf[bytes_read] = 0;
+}
+
+void die(const char *fmtstr, ...) {
+    va_list ap;
+    va_start(ap, fmtstr);
+    // ok: c-format-string
+    vprintf(fmtstr, ap);
+    va_end(ap);
+    exit(1);
+}
+
+int save_submission(char *dirpath, char *infopath) {
+    int status = 0;
+    FILE *f = fopen(infopath, "w+");
+    if (!f) goto fail;
+    fclose(f);
+exit:
+    free(dirpath);
+    free(infopath);
+    return status;
+fail:
+    // ok: c-use-after-free
+    if (infopath) remove(infopath);
+    // ok: c-use-after-free
+    if (dirpath) remove(dirpath);
+    status = -1;
+    goto exit;
+}
+
+void notes4(int err) {
+    struct note *n = malloc(sizeof(*n));
+    free(n);
+    if (err) return;
+    // ruleid: c-use-after-free
+    puts(n->body);
+}
+
+int notes5(int err) {
+    struct note *n = malloc(sizeof(*n));
+    free(n);
+    if (err) return -1;
+    // ruleid: c-use-after-free
+    puts(n->body);
+    return 0;
+}
+
+#define STORAGE_DIR "/service/data/%s/%s"
+void user_path(char *path_buf, char *username) {
+    // ok: c-format-string
+    snprintf(path_buf, 64, STORAGE_DIR, username, "passwd");
+}

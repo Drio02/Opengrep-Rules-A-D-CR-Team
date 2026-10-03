@@ -185,6 +185,14 @@ rules:
               - pattern: $X > $B
               - pattern: $X >= $B
           - focus-metavariable: $X
+      # ... or passed to a bounds-check helper / macro: VALID_IDX(idx)
+      - by-side-effect: true
+        patterns:
+          - pattern: $CHECK($X)
+          - metavariable-regex:
+              metavariable: $CHECK
+              regex: (?i).*(valid|check|bound|range|safe).*
+          - focus-metavariable: $X
     # taint flows into out-parameters of the string/memory helpers
     pattern-propagators:
       - pattern: snprintf($TO, $N, $FMT, ..., $FROM, ...)
@@ -221,4 +229,18 @@ rules:
           - focus-metavariable: $N
       - patterns:
           - pattern: $ARR[$N]
+          # fread(&info->bbmin[i], sizeof(float), 1, f): the index is ours
+          - pattern-not-inside: fread(&$ARR[$N], ...)
+          - pattern-not-inside: read($FD, &$ARR[$N], ...)
+          # buf[strlen(buf) - 1] after a non-empty check (*buf / buf[0])
+          - pattern-not-inside: |
+              if (<... *$ARR ...>) $BODY;
+          - pattern-not-inside: |
+              if (<... *$ARR ...>) { ... }
+          - pattern-not-inside: |
+              if (<... $ARR[0] ...>) $BODY;
+          - pattern-not-inside: |
+              if (<... $ARR[0] ...>) { ... }
+          - pattern-not-inside: '*$ARR && $COND'
+          - pattern-not-inside: '$ARR[0] && $COND'
           - focus-metavariable: $N
