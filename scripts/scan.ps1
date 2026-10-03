@@ -5,19 +5,26 @@
 .EXAMPLE
   .\scripts\scan.ps1 -Target ..\services\notes
   .\scripts\scan.ps1 -Target ..\services\notes -Packs python,infra -Severity WARNING
+  .\scripts\scan.ps1 -Target ..\services\notes -ReportDir C:\ctf\reports
+
+  Besides results.{json,sarif,txt} and triage.txt in -OutDir, an HTML report
+  is written to -ReportDir (default .\opengrep-reports) unless -NoReport.
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Target,
     [string[]]$Packs = @(),
     [ValidateSet('INFO', 'WARNING', 'ERROR')][string]$Severity = 'INFO',
     [string]$OutDir = '',
-    [string]$Opengrep = 'opengrep'
+    [string]$Opengrep = 'opengrep',
+    [string]$ReportDir = '',
+    [switch]$NoReport
 )
 
 $ErrorActionPreference = 'Stop'
 $Repo = Split-Path -Parent $PSScriptRoot
 $Service = Split-Path -Leaf (Resolve-Path $Target)
 if (-not $OutDir) { $OutDir = Join-Path (Get-Location) "opengrep-out\$Service" }
+if (-not $ReportDir) { $ReportDir = Join-Path (Get-Location) 'opengrep-reports' }
 
 $Aliases = @{ python = 'pyhton'; py = 'pyhton'; javascript = 'js'; typescript = 'js'; ts = 'js'; node = 'js';
               cpp = 'c'; 'c++' = 'c'; cs = 'csharp'; dotnet = 'csharp' }
@@ -80,6 +87,11 @@ if ($binaries) {
     }
 }
 
+# never let a stale report from a previous run pass as this one
+'results.json', 'results.sarif', 'results.txt', 'meta.json' | ForEach-Object {
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $OutDir $_)
+}
+
 & $Opengrep scan @configArgs @sevArgs `
     --taint-intrafile --x-ignore-semgrepignore-files --no-git-ignore `
     --exclude node_modules --exclude .git --exclude '*.min.js' --timeout 30 --quiet `
@@ -89,9 +101,39 @@ if ($binaries) {
     $Target | Out-Null
 
 # pick a working interpreter ("python3" can be a Microsoft Store stub)
-$py = Get-Command python3, python -ErrorAction SilentlyContinue |
-    Where-Object { & $_.Source -c 'import sys' 2>$null; $LASTEXITCODE -eq 0 } | Select-Object -First 1
-if ($py) {
-    & $py.Source (Join-Path $Repo 'scripts\triage.py') (Join-Path $OutDir 'results.json') |
-        Tee-Object -FilePath (Join-Path $OutDir 'triage.txt')
+# (the stub writes to stderr, which Windows PowerShell 5 turns into a
+# terminating error under ErrorActionPreference=Stop, hence the try/catch)
+$py = $null
+foreach ($cand in Get-Command python3, python -ErrorAction SilentlyContinue) {
+    try {
+        & $cand.Source -c 'import sys' 2>$null | Out-Null
+        if ($LASTEXITCODE -eq 0) { $py = $cand; break }
+    } catch { }
+}
+
+# scan metadata for report.py (service name, where the sources are, ...)
+$targetFull = (Resolve-Path $Target).Path
+[ordered]@{
+    service     = $Service
+    target      = $targetFull
+    cwd         = (Get-Location).Path
+    scanned_at  = (Get-Date -Format 's')
+    packs       = @($Packs)
+    binaries    = @($binaries | ForEach-Object { $_.FullName.Substring($targetFull.Length).TrimStart('\', '/') })
+    binary_only = [bool]($binaries -and -not $sourcePacksFound)
+} | ConvertTo-Json | Set-Content -Encoding utf8 -Path (Join-Path $OutDir 'meta.json')
+
+if (-not $py) {
+    Write-Host "[!] python not found: no triage / HTML report"
+} else {
+    if (Test-Path (Join-Path $OutDir 'results.json')) {
+        & $py.Source (Join-Path $Repo 'scripts\triage.py') (Join-Path $OutDir 'results.json') |
+            Tee-Object -FilePath (Join-Path $OutDir 'triage.txt')
+    } else {
+        Write-Host "[!] opengrep produced no results.json (see the error above)"
+    }
+    if (-not $NoReport) {
+        $html = Join-Path $ReportDir ("{0}-{1}.html" -f $Service, (Get-Date -Format 'yyyyMMdd-HHmmss'))
+        & $py.Source (Join-Path $Repo 'scripts\report.py') --no-clobber --title "A&D scan - $Service" -o $html $OutDir
+    }
 }

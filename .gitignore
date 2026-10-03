@@ -1,0 +1,4 @@
+# scan output when the wrappers are run from inside the repo
+opengrep-out/
+opengrep-reports/
+__pycache__/

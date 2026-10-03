@@ -25,9 +25,11 @@ minutes, **where to read first**.
    folders) and `git init` them locally, so you can diff your patches.
 2. **Scan everything at once**:
    ```bash
-   for s in services/*/; do SEVERITY=WARNING scripts/scan.sh "$s"; done
+   PARALLEL=4 SEVERITY=WARNING scripts/scan-bulk.sh services/
    ```
-3. Post each `opengrep-out/<service>/triage.txt` in the team channel.
+3. Post `opengrep-reports/bulk-<timestamp>.html` in the team channel (one
+   file, opens offline). Mark findings as confirmed / false positive /
+   patched in it as you go.
 
 ## T+5 - Infra quick wins (no code reading needed)
 

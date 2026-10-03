@@ -109,7 +109,9 @@ the Opengrep docs on testing rules.
 
 | Script | Purpose |
 |---|---|
-| `scan.sh` / `scan.ps1` | Scan a service with auto-detected packs and write `results.{txt,json,sarif}` plus `triage.txt`. |
+| `scan.sh` / `scan.ps1` | Scan a service with auto-detected packs and write `results.{txt,json,sarif}`, `triage.txt` and an HTML report. |
+| `scan-bulk.sh` / `scan-bulk.ps1` | Scan every service of a directory or list file and build one combined HTML report. |
 | `triage.py` | Rank an Opengrep JSON report by A&D impact and severity. |
+| `report.py` | Build the self-contained HTML report from one or more scan output directories. |
 | `test-rules.sh` | Validate every pack and run all fixtures. Exits non-zero on failure. |
 | `gen-catalog.py` | Regenerate [Rule Catalog](Rule-Catalog.md) from the YAML files. |
