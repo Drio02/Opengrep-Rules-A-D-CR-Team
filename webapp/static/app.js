@@ -60,7 +60,7 @@
       S.services.forEach(function (s, si) {
         s.findings.forEach(function (f) { f.service = s.name; f.si = si; S.all.push(f); });
       });
-      renderSettings(); renderJob(S.state.job); renderPatchers(); renderSummary(); fillFilters(); renderList();
+      renderSettings(); renderJob(S.state.job); renderGitAccess(); renderPatchers(); renderSummary(); fillFilters(); renderList();
     }).catch(function (e) { flash(e.message, true); });
   }
 
@@ -109,6 +109,52 @@
   $("btn-pull").addEventListener("click", function () { startJob("/api/pull", "Pull"); });
   $("btn-pull-scan").addEventListener("click", function () { startJob("/api/pull-scan", "Pull + analysis"); });
 
+  // ---- git access (detected at start, before any pull) -----------------------------
+  var accessOpenedSettings = false;
+  function renderGitAccess() {
+    var a = S.state.gitAccess || { state: "none" }, box = $("git-access"), txt = $("git-access-text");
+    var jobRunning = S.state.job && S.state.job.state === "running";
+    var pullBlocked = a.state === "failed" && !a.running;
+    ["btn-pull", "btn-pull-scan"].forEach(function (id) {
+      $(id).disabled = jobRunning || pullBlocked;
+      $(id).title = pullBlocked ? "No git access to the remotes: fix it first (see the message below)" : "";
+    });
+    if (a.running && a.state === "none") {
+      box.hidden = false; box.className = "access checking";
+      txt.textContent = "Checking git access to the service remotes..."; return;
+    }
+    if (a.state === "none" || !a.hosts) { box.hidden = !a.error; txt.textContent = a.error || ""; return; }
+    box.hidden = false;
+    box.className = "access " + (a.running ? "checking" : a.state);
+    var parts = [];
+    if (a.running) parts.push("<div class='sub'>Re-checking...</div>");
+    var good = a.hosts.filter(function (h) { return h.ok; }), bad = a.hosts.filter(function (h) { return !h.ok; });
+    if (bad.length) {
+      parts.push("<div><span class='bad'>Git pull will fail</span> - checked " + esc((a.checked || "").replace("T", " ")) + "</div><ul>" +
+        bad.map(function (h) {
+          return "<li><span class='host'>" + esc(h.host) + "</span> (" + h.services.length + " service(s): " +
+            esc(h.services.join(", ")) + "): <b>" + esc(h.error) + "</b>" + (h.hint ? "<br>Fix: " + esc(h.hint) : "") + "</li>";
+        }).join("") + "</ul>");
+    }
+    if (good.length) {
+      parts.push("<div><span class='good'>Git access OK</span>: " + good.map(function (h) {
+        return "<span class='host'>" + esc(h.host) + "</span> (" + h.services.length + ")";
+      }).join(", ") + "</div>");
+    }
+    if (a.no_git && a.no_git.length) parts.push("<div class='sub'>Not git repositories (not pulled): " + esc(a.no_git.join(", ")) + "</div>");
+    if (a.no_remote && a.no_remote.length) parts.push("<div class='sub'>No 'origin' remote: " + esc(a.no_remote.join(", ")) + "</div>");
+    txt.innerHTML = parts.join("");
+    // point straight at the field to fix
+    if (!accessOpenedSettings && bad.some(function (h) { return /^(auth|key_)/.test(h.kind); })) {
+      $("settings").open = true; accessOpenedSettings = true;
+    }
+  }
+  $("btn-git-check").addEventListener("click", function () {
+    api("POST", "/api/git-check", {}).then(function (r) {
+      S.state.gitAccess = r.gitAccess; renderGitAccess(); setTimeout(function () { refresh(true); }, 1500);
+    }).catch(function (e) { flash(e.message, true); });
+  });
+
   // ---- job progress ------------------------------------------------------------
   var STEP_LABEL = { queued: "queued", running: "running...", ok: "ok", failed: "FAILED", skipped: "skipped" };
   function renderJob(job) {
@@ -117,9 +163,14 @@
     var pill = $("job-pill");
     if (!job) { pill.hidden = true; $("job-panel").hidden = true; return; }
     var names = { scan: "Analysis", pull: "Pull", "pull-scan": "Pull + analysis" };
+    var failedSteps = 0;
+    Object.keys(job.steps).forEach(function (n) {
+      ["pull", "scan"].forEach(function (p) { if (job.steps[n][p] && job.steps[n][p].state === "failed") failedSteps++; });
+    });
+    var shown = job.state === "done" && failedSteps ? "failed" : job.state;
     pill.hidden = false;
-    pill.className = "job-pill " + job.state;
-    pill.textContent = names[job.kind] + ": " + job.state;
+    pill.className = "job-pill " + shown;
+    pill.textContent = names[job.kind] + ": " + job.state + (failedSteps && job.state !== "running" ? " (" + failedSteps + " failed)" : "");
     $("job-panel").hidden = false;
     $("job-title").textContent = names[job.kind] + " - " + job.state + " (started " + job.started.replace("T", " ") +
       (job.finished ? ", finished " + job.finished.replace("T", " ") : "") + ")" + (job.error ? " - " + job.error : "");

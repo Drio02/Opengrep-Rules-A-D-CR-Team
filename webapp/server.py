@@ -141,6 +141,126 @@ def git_env(ssh_key):
     return env
 
 
+def remote_host(url):
+    """Group key for a remote: user@host for ssh/https remotes, 'local' for paths."""
+    if "://" in url:
+        p = urllib.parse.urlparse(url)
+        netloc = p.netloc
+        if p.scheme in ("http", "https"):
+            netloc = netloc.rsplit("@", 1)[-1]  # never show embedded credentials
+        return netloc or "local"
+    m = re.match(r"^([\w.-]+@)?([\w.-]+|\[[0-9A-Fa-f:]+\]):(?!//)", url)  # scp-like user@host:path
+    if m and not re.match(r"^[A-Za-z]:[\\/]", url):
+        return (m.group(1) or "") + m.group(2)
+    return "local"
+
+
+# (substring in git/ssh output, kind, short error, hint)
+GIT_ERRORS = [
+    ("UNPROTECTED PRIVATE KEY FILE", "key_perms", "ssh refused the key: permissions too open",
+     "chmod 600 the key (a key under /mnt/c cannot be chmod'ed: copy it to ~/.ssh first)"),
+    ("bad permissions", "key_perms", "ssh refused the key: bad permissions",
+     "chmod 600 the key (a key under /mnt/c cannot be chmod'ed: copy it to ~/.ssh first)"),
+    ("Load key", "key_invalid", "the SSH key file could not be loaded",
+     "check the key file (full BEGIN/END block, LF line endings, no passphrase)"),
+    ("Permission denied", "auth", "authentication refused (publickey/password)",
+     "set 'SSH key for git' in Settings to the vulnbox key (chmod 600)"),
+    ("Host key verification failed", "hostkey", "host key verification failed",
+     "the vulnbox host key changed: remove the old entry with ssh-keygen -R <host>"),
+    ("REMOTE HOST IDENTIFICATION HAS CHANGED", "hostkey", "host key changed",
+     "the vulnbox host key changed: remove the old entry with ssh-keygen -R <host>"),
+    ("Could not resolve hostname", "unreachable", "host name does not resolve",
+     "check the remote URL / DNS"),
+    ("Connection timed out", "unreachable", "connection timed out",
+     "is the VPN up and the vulnbox reachable?"),
+    ("No route to host", "unreachable", "no route to host", "is the VPN up?"),
+    ("Network is unreachable", "unreachable", "network unreachable", "is the VPN up?"),
+    ("Connection refused", "unreachable", "connection refused (sshd down / wrong port)",
+     "check that sshd runs on the vulnbox"),
+    ("timed out after", "unreachable", "no answer from the remote", "is the VPN up and the vulnbox reachable?"),
+    ("does not appear to be a git repository", "repo", "remote path is not a git repository",
+     "run the backup script once to create the repos on the vulnbox"),
+]
+
+
+def classify_git_error(out):
+    for needle, kind, error, hint in GIT_ERRORS:
+        if needle in out:
+            return kind, error, hint
+    lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("Warning: Permanently added")]
+    return "other", (" | ".join(lines) or "git failed")[:200], ""
+
+
+def check_git_access(root, ssh_key):
+    """One `git ls-remote` per remote host (not per service) to find auth /
+    network problems before pulling."""
+    hosts, no_git, no_remote = {}, [], []
+    for name, path in discover_services(root):
+        if not os.path.isdir(os.path.join(path, ".git")):
+            no_git.append(name)
+            continue
+        rc, url = run(["git", "-C", path, "remote", "get-url", "origin"], timeout=10)
+        if rc != 0 or not url:
+            no_remote.append(name)
+            continue
+        hosts.setdefault(remote_host(url), []).append((name, path))
+    env = git_env(ssh_key)
+    result = []
+    for host, items in sorted(hosts.items()):
+        rc, out = run(["git", "-C", items[0][1], "ls-remote", "--heads", "origin"], env=env, timeout=25)
+        entry = {"host": host, "services": [n for n, _ in items], "ok": rc == 0,
+                 "kind": "", "error": "", "hint": ""}
+        if rc != 0:
+            entry["kind"], entry["error"], entry["hint"] = classify_git_error(out)
+        result.append(entry)
+    failed = [h for h in result if not h["ok"]]
+    state = "none" if not result else "ok" if not failed else "failed" if len(failed) == len(result) else "partial"
+    return {"state": state, "checked": now(), "hosts": result, "no_git": no_git, "no_remote": no_remote,
+            "ssh_key": ssh_key}
+
+
+class GitAccess:
+    """Background git access check, refreshed on start / settings change / pull."""
+
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.result = {"state": "none"}
+        self.running = False
+        self.again = False
+
+    def view(self):
+        return dict(self.result, running=self.running)
+
+    def set(self, result):
+        self.result = result
+        with self.store.lock:
+            self.store.state["version"] += 1
+
+    def trigger(self):
+        with self.lock:
+            if self.running:
+                self.again = True
+                return
+            self.running = True
+        threading.Thread(target=self._loop, daemon=True).start()
+
+    def _loop(self):
+        while True:
+            s = dict(self.store.state["settings"])
+            try:
+                res = check_git_access(s["root"], s["ssh_key"]) if s["root"] else {"state": "none"}
+            except Exception as e:  # never kill the server for a check
+                res = {"state": "failed", "checked": now(), "hosts": [], "no_git": [], "no_remote": [],
+                       "error": str(e)}
+            with self.lock:
+                if not self.again:
+                    self.running = False
+                    self.set(res)
+                    return
+                self.again = False
+
+
 def pull_service(path, branch, ssh_key):
     """Fast-forward the service to origin/<branch>. Never switches branches
     and never discards local patches. Returns (state, message)."""
@@ -149,13 +269,8 @@ def pull_service(path, branch, ssh_key):
     env = git_env(ssh_key)
     rc, out = run(["git", "-C", path, "fetch", "--prune", "origin"], env=env, timeout=90)
     if rc != 0:
-        noise = ("Warning: Permanently added", "fatal: Could not read from remote",
-                 "Please make sure you have", "and the repository exists")
-        lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith(noise)]
-        msg = "git fetch failed: " + " | ".join(lines)[-300:]
-        if "Permission denied" in out:
-            msg += " (set the SSH key for git in Settings)"
-        return "failed", msg
+        _, error, hint = classify_git_error(out)
+        return "failed", "git fetch failed: " + error + (f" -> {hint}" if hint else "")
     target = branch
     rc, _ = run(["git", "-C", path, "rev-parse", "--verify", "--quiet", f"origin/{target}"])
     fallback = ""
@@ -247,8 +362,9 @@ class Store:
 # background jobs
 # ---------------------------------------------------------------------------
 class Jobs:
-    def __init__(self, store):
+    def __init__(self, store, access):
         self.store = store
+        self.access = access
         self.lock = threading.Lock()
         self.job = None
 
@@ -294,9 +410,28 @@ class Jobs:
     # -- git pull ------------------------------------------------------------
     def _pull(self, s):
         services = discover_services(s["root"])
-        self.log(f"pulling {len(services)} service(s) from origin/{s['branch']}")
         for name, _ in services:
             self.step(name, "pull", "queued")
+
+        # preflight: one connection per remote host instead of N identical failures
+        self.log("checking git access to the remotes...")
+        access = check_git_access(s["root"], s["ssh_key"])
+        self.access.set(access)
+        blocked = {}
+        for h in access["hosts"]:
+            if h["ok"]:
+                self.log(f"git access to {h['host']}: ok ({len(h['services'])} service(s))")
+                continue
+            msg = f"{h['host']}: {h['error']}" + (f" -> {h['hint']}" if h["hint"] else "")
+            self.log("git access FAILED, not pulling " + ", ".join(h["services"]) + ": " + msg)
+            for n in h["services"]:
+                blocked[n] = msg
+        for n in access["no_remote"]:
+            blocked[n] = "no 'origin' remote"
+        for n, msg in blocked.items():
+            self.step(n, "pull", "failed", msg)
+        services = [(n, p) for n, p in services if n not in blocked]
+        self.log(f"pulling {len(services)} service(s) from origin/{s['branch']}")
 
         def one(item):
             name, path = item
@@ -441,6 +576,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "settings": st.state["settings"], "patchers": st.state["patchers"],
                     "defaultPatchers": DEFAULT_PATCHERS, "statuses": STATUSES,
                     "version": st.state["version"], "job": self.jobs.job,
+                    "gitAccess": self.jobs.access.view(),
                     "scan": {k: scan.get(k) for k in ("run", "finished", "root", "skip_compose", "severity")},
                     "impactOrder": [i for i in report.IMPACT_ORDER if i],
                 })
@@ -498,6 +634,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     raise ValueError(f"ssh key not found: {k}")
                 if "'" in k:
                     raise ValueError("invalid ssh key path")
+                if k:
+                    k = os.path.abspath(k)
+                    if not os.access(k, os.R_OK):
+                        raise ValueError(f"ssh key not readable by this user: {k}")
+                    mode = os.stat(k).st_mode & 0o777
+                    if mode & 0o077:
+                        hint = (" Files under /mnt/c cannot be chmod'ed: copy it to ~/.ssh first."
+                                if k.startswith("/mnt/") else "")
+                        raise ValueError(f"ssh key permissions {oct(mode)} are too open, ssh will refuse it: "
+                                         f"run chmod 600 {k}.{hint}")
                 new["ssh_key"] = k
             if "opengrep" in data:
                 o = os.path.expanduser(str(data["opengrep"]).strip())
@@ -513,9 +659,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if "parallel" in data:
                 new["parallel"] = max(1, min(16, int(data["parallel"])))
             with st.lock:
+                old = st.state["settings"]
                 st.state["settings"] = new
                 st.save()
+            if (old["root"], old["ssh_key"]) != (new["root"], new["ssh_key"]):
+                self.jobs.access.trigger()
             return {"settings": new, "services": [n for n, _ in discover_services(new["root"])]}
+
+        if path == "/api/git-check":
+            self.jobs.access.trigger()
+            return {"gitAccess": self.jobs.access.view()}
 
         if path in ("/api/scan", "/api/pull", "/api/pull-scan"):
             job = self.jobs.start(path.rsplit("/", 1)[1])
@@ -606,7 +759,10 @@ def main():
     token = args.token
     if not token and not is_loopback(args.host):
         token = secrets.token_urlsafe(18)
-    Handler.store, Handler.jobs, Handler.token = store, Jobs(store), token
+    access = GitAccess(store)
+    Handler.store, Handler.jobs, Handler.token = store, Jobs(store, access), token
+    if store.state["settings"]["root"]:
+        access.trigger()  # detect missing SSH key / unreachable vulnbox right away
 
     try:
         httpd = http.server.ThreadingHTTPServer((args.host, args.port), Handler)

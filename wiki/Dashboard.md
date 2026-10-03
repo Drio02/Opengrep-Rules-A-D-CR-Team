@@ -57,8 +57,28 @@ bind to `0.0.0.0` without the token, and prefer the team VPN / LAN interface
 5. **Download HTML report**: the same offline report as `scan-bulk.sh`.
 
 For the vulnbox repos set *SSH key for git* in *Settings* (the key used by
-`backup-services-v2.sh`, saved to a file with `chmod 600`). Without it the pull
-shows `Permission denied (publickey)`.
+`backup-services-v2.sh`, saved to a file with `chmod 600`).
+
+### Git access check
+
+Git access is checked **before any pull**: when the server starts, when the
+services directory or the SSH key changes, before every *Pull*, and with
+*Check git access again*. It does one `git ls-remote` per remote host (all the
+vulnbox services share one host, so it is one SSH connection), and shows a
+banner with the problem and the fix:
+
+| Problem | Shown as | Fix |
+|---|---|---|
+| no key / wrong key | `authentication refused (publickey/password)` | set *SSH key for git* to the vulnbox key |
+| key readable by others | `permissions too open` | `chmod 600`; a key under `/mnt/c` cannot be chmod'ed, copy it to `~/.ssh` |
+| broken key file | `the SSH key file could not be loaded` | full BEGIN/END block, LF line endings, no passphrase |
+| VPN down / vulnbox off | `connection timed out`, `no route to host`, ... | bring the VPN up |
+| vulnbox reinstalled | `host key changed` | `ssh-keygen -R <host>` |
+
+While every remote fails, *Pull latest* and *Pull latest + re-run* are
+disabled. Saving a key whose permissions are too open is refused right away,
+and when a pull runs anyway, services of an unreachable host fail at once with
+that reason instead of trying one by one.
 
 ### Labels and assignees
 
