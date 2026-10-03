@@ -1,0 +1,73 @@
+rules:
+- id: rust-crypto-non-csprng
+  languages:
+  - rust
+  severity: ERROR
+  message: rand::thread_rng / rand::random no garantizan CSPRNG estrictamente. Para cripto usa rand::rngs::OsRng
+    o getrandom::getrandom.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: rand::thread_rng()
+  - pattern: rand::random()
+  - pattern: StdRng::from_entropy()
+  - pattern: SmallRng::from_entropy()
+- id: rust-crypto-weak-rsa-keysize
+  languages:
+  - rust
+  severity: ERROR
+  message: RsaPrivateKey::new con bits <2048. Usa >=3072.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: RsaPrivateKey::new($R, $BITS)
+    - pattern: rsa::RsaPrivateKey::new($R, $BITS)
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: rust-crypto-ecb-mode
+  languages:
+  - rust
+  severity: ERROR
+  message: ECB nunca es seguro. Usa aes-gcm o aes-cbc + HMAC.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  pattern-either:
+  - pattern: Ecb::<$C, $P>::new_from_slices(...)
+  - pattern: ecb::Encryptor::<$C>::new(...)
+- id: rust-crypto-weak-hash-for-security
+  languages:
+  - rust
+  severity: WARNING
+  message: MD5/SHA1 estan rotos. Usa sha2::Sha256+ o Argon2/bcrypt para passwords.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Md5::new()
+  - pattern: Md5::digest($X)
+  - pattern: md5::compute($X)
+  - pattern: Sha1::new()
+  - pattern: Sha1::digest($X)
+- id: rust-crypto-static-key-or-iv
+  languages:
+  - rust
+  severity: WARNING
+  message: Clave/IV construido con array literal corto en el codigo. En A&D el codigo es publico.
+  metadata:
+    category: security
+    cwe: CWE-321
+    confidence: LOW
+  patterns:
+  - pattern: 'let $N: [u8; $L] = [...];'
+  - metavariable-regex:
+      metavariable: $N
+      regex: (?i).*(key|iv|nonce|secret).*

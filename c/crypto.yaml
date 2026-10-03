@@ -1,0 +1,85 @@
+rules:
+- id: cpp-random-device-truncated-to-small-int
+  languages:
+  - cpp
+  severity: ERROR
+  message: random_device() devuelve 32 bits pero se asigna a un tipo pequeno (uint8_t/uint16_t/int8_t/int16_t/char),
+    truncando entropia a <=16 bits. El espacio de semillas resultante es brute-forceable en milisegundos. En criptografia
+    esto compromete claves y nonces.
+  metadata:
+    category: security
+    cwe: 'CWE-331: Insufficient Entropy'
+    confidence: HIGH
+  pattern-either:
+  - pattern: uint8_t  $S = $RD();
+  - pattern: uint16_t $S = $RD();
+  - pattern: int8_t   $S = $RD();
+  - pattern: int16_t  $S = $RD();
+  - pattern: char     $S = $RD();
+  - pattern: short    $S = $RD();
+- id: cpp-non-cryptographic-prng
+  severity: WARNING
+  message: mt19937 / default_random_engine / linear_congruential_engine NO son criptograficamente seguros. Para
+    claves, nonces o tokens usa std::random_device directamente (no como semilla) o una CSPRNG (OpenSSL RAND_bytes,
+    libsodium randombytes_buf).
+  metadata:
+    category: security
+    cwe: 'CWE-338: Weak PRNG'
+    confidence: MEDIUM
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.cc'
+    - '*.cpp'
+    - '*.cxx'
+    - '*.h'
+    - '*.hpp'
+  pattern-regex: (std::)?(mt19937(_64)?|default_random_engine|minstd_rand0?|knuth_b)\s+\w+\s*\(
+- id: cpp-hardcoded-db-credentials
+  languages:
+  - generic
+  severity: ERROR
+  message: Credenciales de DB hardcodeadas. En A&D el codigo es publico y la DB es alcanzable si el puerto esta
+    expuesto. Cargalas del entorno.
+  metadata:
+    category: security
+    cwe: 'CWE-798: Hardcoded Credentials'
+    confidence: HIGH
+  paths:
+    include:
+    - '*.cc'
+    - '*.cpp'
+    - '*.cxx'
+    - '*.h'
+    - '*.hpp'
+  pattern-regex: \.(password|user)\s*=\s*"[^"]{1,64}"
+- id: cpp-grpc-insecure-credentials
+  languages:
+  - cpp
+  severity: WARNING
+  message: gRPC con InsecureServerCredentials. En produccion exponerse sin TLS permite MITM y escucha de tokens.
+    En A&D interno es menos critico.
+  metadata:
+    category: security
+    cwe: 'CWE-319: Cleartext Transmission'
+    confidence: MEDIUM
+  pattern: grpc::InsecureServerCredentials()
+- id: cpp-single-call-random-device-seed
+  severity: INFO
+  message: Se usa random_device() una sola vez para sembrar. Para claves cripto, llena un buffer completo (std::seed_seq
+    / RAND_bytes). Un unico uint solo da 32 bits de semilla, insuficiente para espacios grandes de clave.
+  metadata:
+    category: security
+    cwe: 'CWE-335: Incorrect Usage of Seeds'
+    confidence: LOW
+  languages:
+  - generic
+  paths:
+    include:
+    - '*.cc'
+    - '*.cpp'
+    - '*.cxx'
+    - '*.h'
+    - '*.hpp'
+  pattern-regex: (std::)?(mt19937(_64)?|default_random_engine)\s+\w+\s*\(\s*(std::)?random_device

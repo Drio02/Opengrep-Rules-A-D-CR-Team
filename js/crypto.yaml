@@ -1,0 +1,77 @@
+rules:
+- id: js-crypto-math-random-for-security
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: Math.random() NO es CSPRNG. Usa crypto.randomBytes() o crypto.randomInt() de Node.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern: Math.random()
+- id: js-crypto-weak-rsa-keysize
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: Clave RSA <2048 bits. Usa >=3072. (node:crypto generateKeyPair / node-forge).
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: 'crypto.generateKeyPair("rsa", { modulusLength: $BITS, ... }, ...)'
+    - pattern: 'crypto.generateKeyPairSync($A, { modulusLength: $BITS, ... })'
+    - pattern: 'forge.pki.rsa.generateKeyPair({ bits: $BITS, ... })'
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: js-crypto-ecb-mode
+  languages:
+  - javascript
+  - typescript
+  severity: ERROR
+  message: Modo ECB nunca es seguro. Usa aes-256-gcm o aes-256-cbc con HMAC.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: crypto.createCipheriv($ALG, ...)
+    - pattern: crypto.createCipher($ALG, ...)
+  - metavariable-regex:
+      metavariable: $ALG
+      regex: .*(aes-\d+-ecb|des-ecb).*
+- id: js-crypto-weak-hash-for-security
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: MD5/SHA1 estan rotos para firma/password. Usa sha256+ o bcrypt/argon2.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  patterns:
+  - pattern: crypto.createHash($A)
+  - metavariable-regex:
+      metavariable: $A
+      regex: .*(md5|sha1).*
+- id: js-crypto-static-iv-nonce
+  languages:
+  - javascript
+  - typescript
+  severity: WARNING
+  message: IV literal/constante en createCipheriv. En CBC o GCM compromete el cifrado.
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  patterns:
+  - pattern: crypto.createCipheriv($A, $K, $IV)
+  - metavariable-regex:
+      metavariable: $IV
+      regex: .*(Buffer\.|['"]|new Uint8Array).*

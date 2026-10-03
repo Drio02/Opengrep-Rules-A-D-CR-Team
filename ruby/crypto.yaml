@@ -1,0 +1,76 @@
+rules:
+- id: ruby-crypto-rand-for-security
+  languages:
+  - ruby
+  severity: ERROR
+  message: Kernel#rand / Random.new no son CSPRNG. Usa SecureRandom.hex / SecureRandom.random_bytes.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern-either:
+  - pattern: rand($X)
+  - pattern: rand()
+  - pattern: Random.new($S)
+  - pattern: Random.rand($X)
+  - pattern: srand($X)
+- id: ruby-crypto-weak-rsa
+  languages:
+  - ruby
+  severity: ERROR
+  message: OpenSSL::PKey::RSA.new con bits <2048.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern: OpenSSL::PKey::RSA.new($BITS)
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: ruby-crypto-ecb-mode
+  languages:
+  - ruby
+  severity: ERROR
+  message: OpenSSL::Cipher con modo ECB nunca es seguro.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: OpenSSL::Cipher.new($A)
+    - pattern: OpenSSL::Cipher::AES.new($A)
+  - metavariable-regex:
+      metavariable: $A
+      regex: .*(ECB|aes-\d+-ecb).*
+- id: ruby-crypto-weak-hash-for-security
+  languages:
+  - ruby
+  severity: WARNING
+  message: MD5/SHA1 estan rotos. Usa SHA-256+ o BCrypt para passwords.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: Digest::MD5.hexdigest($X)
+  - pattern: Digest::MD5.digest($X)
+  - pattern: Digest::SHA1.hexdigest($X)
+  - pattern: Digest::SHA1.digest($X)
+  - pattern: OpenSSL::Digest::MD5.new
+  - pattern: OpenSSL::Digest::SHA1.new
+- id: ruby-crypto-static-iv
+  languages:
+  - ruby
+  severity: WARNING
+  message: IV con string literal corta. En CBC/GCM compromete el cifrado.
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  patterns:
+  - pattern: $C.iv = $IV
+  - metavariable-regex:
+      metavariable: $IV
+      regex: .*"[^"]{1,16}".*

@@ -1,0 +1,71 @@
+rules:
+- id: java-crypto-util-random-for-security
+  languages:
+  - java
+  severity: ERROR
+  message: java.util.Random NO es CSPRNG. Usa java.security.SecureRandom.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern-either:
+  - pattern: new Random()
+  - pattern: new Random($S)
+  - pattern: new java.util.Random()
+  - pattern: ThreadLocalRandom.current()
+- id: java-crypto-weak-rsa-dsa-keysize
+  languages:
+  - java
+  severity: ERROR
+  message: KeyPairGenerator con <2048 bits. Afecta RSA/DSA/DH.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern: $KPG.initialize($BITS)
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: java-crypto-ecb-mode
+  languages:
+  - java
+  severity: ERROR
+  message: Cipher.getInstance con modo ECB o algoritmo que lo usa por defecto (plain 'AES' = AES/ECB).
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  pattern-either:
+  - pattern: Cipher.getInstance("AES")
+  - pattern: Cipher.getInstance("DES")
+  - pattern: Cipher.getInstance("DESede")
+  - pattern: Cipher.getInstance("AES/ECB/PKCS5Padding")
+  - pattern: Cipher.getInstance("AES/ECB/NoPadding")
+  - pattern: Cipher.getInstance("DES/ECB/PKCS5Padding")
+- id: java-crypto-weak-hash-for-security
+  languages:
+  - java
+  severity: WARNING
+  message: MD5/SHA1 estan rotos. Para passwords usa BCrypt/Argon2; para firma usa SHA-256+.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: MessageDigest.getInstance("MD5")
+  - pattern: MessageDigest.getInstance("SHA-1")
+  - pattern: MessageDigest.getInstance("SHA1")
+- id: java-crypto-static-iv
+  languages:
+  - java
+  severity: WARNING
+  message: IvParameterSpec con array literal o repetitivo. En CBC/GCM compromete el cifrado.
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: new IvParameterSpec(new byte[] {...})
+  - pattern: new IvParameterSpec($S.getBytes())
+  - pattern: new GCMParameterSpec($T, new byte[] {...})

@@ -1,0 +1,82 @@
+rules:
+- id: py-crypto-random-for-security
+  languages:
+  - python
+  severity: ERROR
+  message: random/numpy.random no son CSPRNG. Para claves/tokens/nonces usa 'secrets' (secrets.token_bytes, secrets.randbits,
+    secrets.choice).
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern-either:
+  - pattern: random.random()
+  - pattern: random.randint(...)
+  - pattern: random.randrange(...)
+  - pattern: random.choice(...)
+  - pattern: random.sample(...)
+  - pattern: random.getrandbits(...)
+  - pattern: numpy.random.randint(...)
+  - pattern: np.random.randint(...)
+- id: py-crypto-rsa-weak-keysize
+  languages:
+  - python
+  severity: ERROR
+  message: Clave RSA debil (<2048 bits). Para claves nuevas usa >=3072. Afecta pycryptodome y cryptography.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: RSA.generate($BITS)
+    - pattern: RSA.generate($BITS, ...)
+    - pattern: rsa.generate_private_key(public_exponent=$E, key_size=$BITS, ...)
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: py-crypto-ecb-mode
+  languages:
+  - python
+  severity: ERROR
+  message: Modo ECB nunca es seguro para cifrado. Usa AES-GCM o AES-CBC con MAC.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  pattern-either:
+  - pattern: AES.new($K, AES.MODE_ECB)
+  - pattern: AES.new($K, AES.MODE_ECB, ...)
+  - pattern: Cipher($A, modes.ECB(), ...)
+  - pattern: DES.new($K, DES.MODE_ECB)
+- id: py-crypto-hash-md5-sha1-security
+  languages:
+  - python
+  severity: WARNING
+  message: MD5/SHA1 estan rotos para firma/password/HMAC-con-llave-corta. Usa SHA-256+ o bcrypt/argon2 para passwords.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: hashlib.md5(...)
+  - pattern: hashlib.sha1(...)
+  - pattern: hashlib.new("md5", ...)
+  - pattern: hashlib.new("sha1", ...)
+  - pattern: Crypto.Hash.MD5.new(...)
+  - pattern: Crypto.Hash.SHA1.new(...)
+- id: py-crypto-static-iv-nonce
+  languages:
+  - python
+  severity: WARNING
+  message: IV/nonce literal pasado directamente a AES.new. Revisa si es constante (bug) o calculado (ok).
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: AES.new($K, $M, b"...")
+    - pattern: AES.new($K, $M, iv=b"...")
+    - pattern: AES.new($K, $M, nonce=b"...")
+    - pattern: AES.new($K, $M, bytes(...))

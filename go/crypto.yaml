@@ -1,0 +1,73 @@
+rules:
+- id: go-crypto-math-rand-for-security
+  languages:
+  - go
+  severity: ERROR
+  message: math/rand NO es CSPRNG. Para claves/tokens/nonces usa crypto/rand.Reader.
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern-either:
+  - pattern: rand.Int()
+  - pattern: rand.Intn(...)
+  - pattern: rand.Int31()
+  - pattern: rand.Int63()
+  - pattern: rand.Uint32()
+  - pattern: rand.Uint64()
+  - pattern: rand.Read($X)
+  - pattern: rand.Seed(...)
+  - pattern: rand.New(...)
+- id: go-crypto-weak-rsa-keysize
+  languages:
+  - go
+  severity: ERROR
+  message: rsa.GenerateKey con <2048 bits. Usa >=3072.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern: rsa.GenerateKey($R, $BITS)
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: go-crypto-ecb-mode
+  languages:
+  - go
+  severity: ERROR
+  message: BlockMode usado directamente sobre bloques sin CBC/GCM = ECB. Nunca es seguro.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  pattern-either:
+  - pattern: $C.Encrypt($D, $S)
+  - pattern: $C.Decrypt($D, $S)
+- id: go-crypto-weak-hash-for-security
+  languages:
+  - go
+  severity: WARNING
+  message: MD5/SHA1 estan rotos. Usa sha256+ o bcrypt/argon2 para passwords.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: md5.New()
+  - pattern: md5.Sum($X)
+  - pattern: sha1.New()
+  - pattern: sha1.Sum($X)
+- id: go-crypto-static-iv
+  languages:
+  - go
+  severity: WARNING
+  message: IV construido como literal/variable fija. En CBC o GCM rompe el cifrado.
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: cipher.NewCBCEncrypter($B, []byte{...})
+  - pattern: cipher.NewCBCEncrypter($B, []byte($S))
+  - pattern: $GCM.Seal(nil, []byte{...}, $P, nil)

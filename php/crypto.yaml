@@ -1,0 +1,80 @@
+rules:
+- id: php-crypto-weak-random-for-security
+  languages:
+  - php
+  severity: ERROR
+  message: rand()/mt_rand()/uniqid() NO son CSPRNG. Usa random_bytes() o random_int().
+  metadata:
+    category: security
+    cwe: CWE-338
+    confidence: HIGH
+  pattern-either:
+  - pattern: rand()
+  - pattern: rand(...)
+  - pattern: mt_rand()
+  - pattern: mt_rand(...)
+  - pattern: uniqid()
+  - pattern: uniqid(...)
+  - pattern: srand(...)
+  - pattern: mt_srand(...)
+- id: php-crypto-weak-openssl-key
+  languages:
+  - php
+  severity: ERROR
+  message: openssl_pkey_new con bits <2048. Usa >=3072.
+  metadata:
+    category: security
+    cwe: CWE-326
+    confidence: HIGH
+  patterns:
+  - pattern: openssl_pkey_new(["private_key_bits" => $BITS, ...])
+  - metavariable-regex:
+      metavariable: $BITS
+      regex: .*(512|1024|2047).*
+- id: php-crypto-ecb-mode
+  languages:
+  - php
+  severity: ERROR
+  message: Modo ECB en openssl/mcrypt nunca es seguro.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: HIGH
+  patterns:
+  - pattern-either:
+    - pattern: openssl_encrypt($D, $A, $K, ...)
+    - pattern: openssl_decrypt($D, $A, $K, ...)
+    - pattern: mcrypt_encrypt($A, ...)
+  - metavariable-regex:
+      metavariable: $A
+      regex: .*(aes-\d+-ecb|des-ecb|ECB).*
+- id: php-crypto-weak-hash-for-security
+  languages:
+  - php
+  severity: WARNING
+  message: MD5/SHA1 estan rotos. Para passwords usa password_hash(); para firma usa SHA-256+.
+  metadata:
+    category: security
+    cwe: CWE-327
+    confidence: MEDIUM
+  pattern-either:
+  - pattern: md5($X)
+  - pattern: sha1($X)
+  - pattern: hash("md5", $X)
+  - pattern: hash("sha1", $X)
+- id: php-crypto-static-iv
+  languages:
+  - php
+  severity: WARNING
+  message: IV con string literal corta. En CBC/GCM compromete el cifrado.
+  metadata:
+    category: security
+    cwe: CWE-329
+    confidence: MEDIUM
+  patterns:
+  - pattern-either:
+    - pattern: openssl_encrypt($D, $A, $K, $O, $IV, ...)
+    - pattern: openssl_encrypt($D, $A, $K, $O, $IV)
+  - metavariable-regex:
+      metavariable: $IV
+      regex: .*"[^"]{1,16}".*
