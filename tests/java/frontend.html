@@ -1,0 +1,8 @@
+<html xmlns:th="http://www.thymeleaf.org"><body>
+<!-- ruleid: javafe-thymeleaf-utext -->
+<div th:utext="${note.body}"></div>
+<!-- ok: javafe-thymeleaf-utext -->
+<div th:text="${note.body}"></div>
+<!-- ruleid: javafe-thymeleaf-preprocessing -->
+<div th:text="${__${section}__}"></div>
+</body></html>

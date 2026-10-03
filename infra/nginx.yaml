@@ -1,0 +1,86 @@
+# =====================================================================
+# nginx - reverse proxy misconfigurations
+# =====================================================================
+rules:
+  - id: nginx-alias-traversal
+    languages: [generic]
+    severity: ERROR
+    message: >
+      "location /static { alias /srv/static/; }" (location without trailing
+      slash, alias with it) allows /static../app/config.py -> reads files
+      one directory above the alias (source, .env, flags DB). Add the
+      trailing slash to the location or use root.
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: HIGH
+      ad-impact: flag-leak
+    paths:
+      include: ["*.conf", "nginx*", "*.nginx", "default", "sites-*"]
+    pattern-regex: location\s+(=\s+|\^~\s+)?/[^\s{]*[^/\s{]\s*\{[^}]*?\balias\s+[^;]*/\s*;
+
+  - id: nginx-autoindex-on
+    languages: [generic]
+    severity: WARNING
+    message: >
+      autoindex on lists directory contents (uploads, backups, notes stored
+      as files...). Disable it.
+    metadata:
+      category: security
+      cwe: CWE-548
+      confidence: HIGH
+      ad-impact: flag-leak
+    paths:
+      include: ["*.conf", "nginx*", "*.nginx", "default", "sites-*"]
+    pattern-regex: \bautoindex\s+on\s*;
+
+  - id: nginx-crlf-injection-uri
+    languages: [generic]
+    severity: WARNING
+    message: >
+      $uri / $document_uri are URL-DECODED. Using them in return/rewrite/
+      add_header/proxy_set_header lets "%0d%0a" inject headers (session
+      fixation, response splitting). Use $request_uri.
+    metadata:
+      category: security
+      cwe: CWE-113
+      confidence: MEDIUM
+      ad-impact: session-theft
+    paths:
+      include: ["*.conf", "nginx*", "*.nginx", "default", "sites-*"]
+    pattern-regex: \b(return\s+30[1278]|rewrite|add_header|proxy_set_header)\b[^;]*\$(uri|document_uri)\b[^;]*;
+
+  - id: nginx-internal-trusted-header
+    languages: [generic]
+    severity: WARNING
+    message: >
+      The proxy forwards the client-supplied X-Forwarded-For / X-Real-IP
+      ($http_x_forwarded_for) instead of $remote_addr. Backends doing
+      "localhost only" checks become bypassable.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    paths:
+      include: ["*.conf", "nginx*", "*.nginx", "default", "sites-*"]
+    pattern-either:
+      - pattern-regex: proxy_set_header\s+X-Real-IP\s+\$http_x_forwarded_for
+      - pattern-regex: proxy_set_header\s+X-Forwarded-For\s+\$http_x_forwarded_for\s*;
+      - pattern-regex: real_ip_header\s+X-Forwarded-For\s*;[\s\S]*?set_real_ip_from\s+0\.0\.0\.0/0
+
+  - id: nginx-proxy-pass-user-controlled
+    languages: [generic]
+    severity: ERROR
+    message: >
+      proxy_pass target built from request variables ($arg_*, $http_*,
+      $cookie_*, captures of the path). Open proxy / SSRF into the internal
+      Docker network (DBs, admin panels of other services).
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    paths:
+      include: ["*.conf", "nginx*", "*.nginx", "default", "sites-*"]
+    pattern-regex: proxy_pass\s+https?://\$(arg_|http_|cookie_|host\b|\d)[^;]*;

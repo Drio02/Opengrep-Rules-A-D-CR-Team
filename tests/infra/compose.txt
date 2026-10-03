@@ -1,0 +1,35 @@
+services:
+  app:
+    build: .
+    ports:
+      # ok: compose-backing-service-port-exposed
+      - "8080:8080"
+    environment:
+      # ruleid: compose-hardcoded-app-secret
+      - SECRET_KEY=s3cr3t_dev_key
+      # ok: compose-hardcoded-app-secret
+      - JWT_SECRET=${JWT_SECRET}
+      # ruleid: compose-debug-mode-enabled
+      - FLASK_DEBUG=1
+      # ruleid: compose-default-or-empty-db-credentials
+      - DATABASE_URL=postgres://app:postgres@db:5432/app
+    volumes:
+      # ruleid: compose-privileged-or-host-access
+      - /var/run/docker.sock:/var/run/docker.sock
+    # ruleid: compose-privileged-or-host-access
+    privileged: true
+
+  db:
+    image: postgres:16
+    environment:
+      # ruleid: compose-default-or-empty-db-credentials
+      POSTGRES_PASSWORD: postgres
+    ports:
+      # ruleid: compose-backing-service-port-exposed
+      - "5432:5432"
+
+  cache:
+    image: redis:7
+    ports:
+      # ok: compose-backing-service-port-exposed
+      - "127.0.0.1:6379:6379"

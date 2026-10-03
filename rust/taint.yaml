@@ -1,0 +1,493 @@
+# =====================================================================
+# Rust (axum / actix-web / rocket / warp) - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources are handler parameters whose type is a request extractor
+# (Query<T>, Path<T>, Json<T>, Form<T>, web::*, String body, HeaderMap).
+# format!() and string building propagate the taint.
+# =====================================================================
+rules:
+  - id: rust-taint-sqli
+    mode: taint
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Request data reaches a raw SQL string (sqlx/rusqlite/postgres/diesel
+      sql_query). Use bind parameters: sqlx::query("... WHERE id = $1").bind(id).
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sanitizers:
+      - pattern: $X.parse::<i32>()
+      - pattern: $X.parse::<i64>()
+      - pattern: $X.parse::<u32>()
+      - pattern: $X.parse::<u64>()
+      - pattern: $X.parse::<usize>()
+      - pattern: Uuid::parse_str(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: sqlx::query($Q)
+              - pattern: sqlx::query_as($Q)
+              - pattern: sqlx::query_scalar($Q)
+              - pattern: query($Q)
+              - pattern: query_as($Q)
+              - pattern: sql_query($Q)
+              - pattern: diesel::sql_query($Q)
+              - pattern: $CONN.execute($Q, ...)
+              - pattern: $CONN.query($Q, ...)
+              - pattern: $CONN.query_row($Q, ...)
+              - pattern: $CONN.query_one($Q, ...)
+              - pattern: $CONN.prepare($Q)
+              - pattern: $CONN.batch_execute($Q)
+              - pattern: $CONN.simple_query($Q)
+          - focus-metavariable: $Q
+
+  - id: rust-taint-command-injection
+    mode: taint
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Request data reaches std::process::Command as the program, or as the
+      script of "sh -c". RCE. Use a fixed program and pass validated
+      arguments with .arg() (no shell).
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sanitizers:
+      - pattern: $X.parse::<i32>()
+      - pattern: $X.parse::<i64>()
+      - pattern: $X.parse::<u32>()
+      - pattern: $X.parse::<u64>()
+      - pattern: $X.parse::<usize>()
+      - pattern: Uuid::parse_str(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Command::new($X)
+              - pattern: std::process::Command::new($X)
+              - pattern: tokio::process::Command::new($X)
+              - pattern: Command::new($SH).arg("-c").arg($X)
+              - pattern: Command::new($SH).args(["-c", $X])
+              - pattern: Command::new($SH).args(&["-c", $X])
+          - focus-metavariable: $X
+
+  - id: rust-taint-path-traversal
+    mode: taint
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Request data reaches a filesystem path. Path::join with "../" or an
+      absolute path escapes the base. Reject components other than
+      Component::Normal, or canonicalize and check starts_with(base).
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sanitizers:
+      - pattern: $P.file_name()
+      - pattern: sanitize_filename::sanitize(...)
+      - pattern: $X.parse::<u64>()
+      - pattern: $X.parse::<i64>()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: File::open($P)
+              - pattern: File::create($P)
+              - pattern: std::fs::File::open($P)
+              - pattern: tokio::fs::File::open($P)
+              - pattern: fs::read($P)
+              - pattern: fs::read_to_string($P)
+              - pattern: fs::write($P, ...)
+              - pattern: fs::remove_file($P)
+              - pattern: fs::remove_dir_all($P)
+              - pattern: fs::read_dir($P)
+              - pattern: fs::copy($P, ...)
+              - pattern: fs::rename($P, ...)
+              - pattern: std::fs::read($P)
+              - pattern: std::fs::read_to_string($P)
+              - pattern: std::fs::write($P, ...)
+              - pattern: tokio::fs::read($P)
+              - pattern: tokio::fs::read_to_string($P)
+              - pattern: tokio::fs::write($P, ...)
+              - pattern: NamedFile::open($P)
+              - pattern: NamedFile::open_async($P)
+              - pattern: ServeFile::new($P)
+              - pattern: $BASE.join($P)
+          - focus-metavariable: $P
+
+  - id: rust-taint-ssrf
+    mode: taint
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Request data controls the URL of an outgoing request (reqwest/hyper/
+      ureq). Allowlist host and scheme and block private/loopback IPs.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: reqwest::get($U)
+              - pattern: reqwest::blocking::get($U)
+              - pattern: $CLIENT.get($U).send()
+              - pattern: $CLIENT.post($U).send()
+              - pattern: $CLIENT.request($M, $U)
+              - pattern: ureq::get($U)
+              - pattern: ureq::post($U)
+              - pattern: Url::parse($U)
+              - pattern: $U.parse::<Uri>()
+          - focus-metavariable: $U
+
+  - id: rust-taint-ssti
+    mode: taint
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Request data used as template SOURCE (Tera::one_off / render_str,
+      Handlebars render_template, minijinja add_template/render_str).
+      Exposes every value in the context and enables XSS. Use fixed
+      templates.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Tera::one_off($T, ...)
+              - pattern: $TERA.render_str($T, ...)
+              - pattern: $TERA.add_raw_template($NAME, $T)
+              - pattern: $HB.render_template($T, ...)
+              - pattern: $HB.register_template_string($NAME, $T)
+              - pattern: $ENV.render_str($T, ...)
+              - pattern: $ENV.add_template($NAME, $T)
+              - pattern: $ENV.template_from_str($T)
+          - focus-metavariable: $T
+
+  - id: rust-taint-xss
+    mode: taint
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Request data returned as raw HTML (Html(format!(...)), PreEscaped,
+      HttpResponse::Ok().content_type("text/html").body(...)). Escape with
+      html_escape / askama / maud auto-escaping.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sanitizers:
+      - pattern: html_escape::encode_text(...)
+      - pattern: html_escape::encode_safe(...)
+      - pattern: ammonia::clean(...)
+      - pattern: htmlescape::encode_minimal(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Html($X)
+              - pattern: axum::response::Html($X)
+              - pattern: PreEscaped($X)
+              - pattern: RawHtml($X)
+              - pattern: content::RawHtml($X)
+              - pattern: $B.content_type("text/html").body($X)
+              - pattern: $B.content_type("text/html; charset=utf-8").body($X)
+          - focus-metavariable: $X
+
+  - id: rust-taint-open-redirect
+    mode: taint
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Request data controls a redirect target. Allow only relative paths or
+      allowlisted hosts.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  fn $F(..., $P: $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: $MOD::$EXT<$T>, ...) { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|Multipart|Bytes|RawQuery|TypedHeader|Data)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $EXT($P): $EXT<$T>, ...) { ... }
+              - pattern-inside: |
+                  async fn $F(..., $MOD::$EXT($P): $MOD::$EXT<$T>, ...) -> $R { ... }
+          - metavariable-regex:
+              metavariable: $EXT
+              regex: ^(Query|Path|Json|Form|RawQuery)$
+          - pattern: $P
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  async fn $F(..., $P: String, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HeaderMap, ...) -> $R { ... }
+              - pattern-inside: |
+                  async fn $F(..., $P: HttpRequest, ...) -> $R { ... }
+          - pattern: $P
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Redirect::to($U)
+              - pattern: Redirect::temporary($U)
+              - pattern: Redirect::permanent($U)
+              - pattern: Redirect::see_other($U)
+              - pattern: $B.insert_header(("Location", $U))
+              - pattern: $B.append_header(("Location", $U))
+          - focus-metavariable: $U

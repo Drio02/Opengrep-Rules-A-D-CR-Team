@@ -1,0 +1,229 @@
+# =====================================================================
+# Rust - Attack & Defense logic and memory-safety bugs
+# =====================================================================
+rules:
+  - id: rust-jwt-hardcoded-key
+    languages: [rust]
+    severity: ERROR
+    message: >
+      JWT key is a literal (EncodingKey/DecodingKey::from_secret(b"...")).
+      Every team has it -> forge tokens for any user. Generate at boot or
+      read from the environment.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: EncodingKey::from_secret(b"...")
+      - pattern: DecodingKey::from_secret(b"...")
+      - pattern: EncodingKey::from_secret("...".as_bytes())
+      - pattern: DecodingKey::from_secret("...".as_bytes())
+      - pattern: Hmac::<$H>::new_from_slice(b"...")
+      - pattern: Key::from(b"...")
+      - pattern: Key::derive_from(b"...")
+
+  - id: rust-jwt-insecure-validation
+    languages: [rust]
+    severity: ERROR
+    message: >
+      jsonwebtoken validation weakened: signature check disabled, expiry not
+      validated, or the token decoded without verification. Forged / reused
+      tokens are accepted.
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $V.insecure_disable_signature_validation()
+      - pattern: $V.validate_exp = false
+      - pattern: $V.required_spec_claims.clear()
+      - pattern: jsonwebtoken::dangerous_insecure_decode(...)
+      - pattern: dangerous_insecure_decode(...)
+      - pattern: jsonwebtoken::insecure_decode(...)
+
+  - id: rust-predictable-rng
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Non-cryptographic or deterministically seeded RNG (SmallRng,
+      seed_from_u64, fastrand, rand seeded with time). Tokens/IDs become
+      predictable. Use rand::rngs::OsRng / thread_rng() / getrandom.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $RNG::seed_from_u64(...)
+      - pattern: $RNG::from_seed(...)
+      - pattern: SmallRng::from_entropy()
+      - pattern: SmallRng::seed_from_u64(...)
+      - pattern: rand::rngs::SmallRng::from_entropy()
+      - pattern: fastrand::$F(...)
+      - pattern: oorandom::Rand32::new(...)
+      - pattern: oorandom::Rand64::new(...)
+
+  - id: rust-timing-unsafe-secret-compare
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with == or !=. Use
+      constant_time_eq / subtle::ConstantTimeEq / Mac::verify_slice.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|api_?key|passw|otp|nonce|mac)\b.*
+
+  - id: rust-cookie-based-authorization
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Identity / role read from a plain cookie (not get_private / signed).
+      Client-controlled: set role=admin or user_id=<victim>.
+    metadata:
+      category: security
+      cwe: CWE-565
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $JAR.get($K)
+          - pattern: $REQ.cookie($K)
+      - metavariable-regex:
+          metavariable: $JAR
+          regex: (?i).*(jar|cookie).*
+      - metavariable-regex:
+          metavariable: $K
+          regex: (?i)^"(is_?admin|admin|role|level|user_?id|uid|userid|username|user|auth|logged_?in)"$
+
+  - id: rust-ip-based-auth-spoofable
+    languages: [rust]
+    severity: ERROR
+    message: >
+      Client IP read from X-Forwarded-For / X-Real-IP (or actix
+      realip_remote_addr). Client-controlled: send "X-Forwarded-For:
+      127.0.0.1" to pass localhost-only checks.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $H.get("x-forwarded-for")
+      - pattern: $H.get("X-Forwarded-For")
+      - pattern: $H.get("x-real-ip")
+      - pattern: $H.get("X-Real-IP")
+      - pattern: $CI.realip_remote_addr()
+
+  - id: rust-cors-permissive
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Permissive CORS (any origin, possibly with credentials). Any page the
+      checker bot visits can call the API as the bot.
+    metadata:
+      category: security
+      cwe: CWE-942
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-either:
+      - pattern: CorsLayer::permissive()
+      - pattern: CorsLayer::very_permissive()
+      - pattern: Cors::permissive()
+      - pattern: $C.allow_any_origin().supports_credentials()
+      - pattern: $C.send_wildcard().supports_credentials()
+
+  - id: rust-unchecked-memory-ops
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Unchecked memory operation (get_unchecked, set_len, from_utf8_unchecked,
+      copy_nonoverlapping, assume_init, mem::uninitialized, Box::from_raw,
+      ptr::read). In A&D Rust services the planted bug usually hides here:
+      an attacker-controlled index/length -> OOB read of other users' data.
+    metadata:
+      category: security
+      cwe: CWE-787
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: $X.get_unchecked(...)
+      - pattern: $X.get_unchecked_mut(...)
+      - pattern: $X.set_len(...)
+      - pattern: std::str::from_utf8_unchecked(...)
+      - pattern: str::from_utf8_unchecked(...)
+      - pattern: String::from_utf8_unchecked(...)
+      - pattern: std::ptr::copy_nonoverlapping(...)
+      - pattern: ptr::copy_nonoverlapping(...)
+      - pattern: std::ptr::copy(...)
+      - pattern: ptr::read(...)
+      - pattern: ptr::write(...)
+      - pattern: $X.assume_init()
+      - pattern: std::mem::uninitialized()
+      - pattern: mem::uninitialized()
+      - pattern: std::mem::zeroed()
+      - pattern: Box::from_raw(...)
+      - pattern: $P.offset(...)
+      - pattern: $P.add(...)
+
+  - id: rust-unsafe-send-sync-impl
+    languages: [rust]
+    severity: WARNING
+    message: >
+      Manual unsafe impl Send/Sync. If the type holds raw pointers or
+      RefCell/Cell, concurrent requests race on shared state (data leaks
+      between users, double spends).
+    metadata:
+      category: security
+      cwe: CWE-362
+      confidence: MEDIUM
+      ad-impact: integrity
+    pattern-either:
+      - pattern: unsafe impl Send for $T {}
+      - pattern: unsafe impl Sync for $T {}
+      - pattern: unsafe impl<$G> Send for $T<$G> {}
+      - pattern: unsafe impl<$G> Sync for $T<$G> {}
+
+  - id: rust-static-mut
+    languages: [rust]
+    severity: WARNING
+    message: >
+      static mut global state. Every access is unsafe and racy under a
+      multi-threaded runtime (tokio/actix): one user's data can be served to
+      another. Use Mutex/RwLock/atomics or per-request state.
+    metadata:
+      category: security
+      cwe: CWE-362
+      confidence: HIGH
+      ad-impact: integrity
+    pattern: 'static mut $NAME: $T = $V;'
+
+  - id: rust-lossy-integer-cast
+    languages: [rust]
+    severity: INFO
+    message: >
+      Parsed number cast with 'as' to a narrower / differently signed type.
+      'as' silently truncates and wraps (e.g. -1i64 as usize = huge index,
+      300 as u8 = 44). Use try_from / checked arithmetic.
+    metadata:
+      category: security
+      cwe: CWE-681
+      confidence: LOW
+      ad-impact: integrity
+    patterns:
+      - pattern-either:
+          - pattern: $X.parse::<$SRC>().$U() as $DST
+          - pattern: ($X.parse::<$SRC>()?) as $DST
+      - metavariable-regex:
+          metavariable: $DST
+          regex: ^(u8|u16|u32|i8|i16|i32|usize|isize)$

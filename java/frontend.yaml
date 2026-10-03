@@ -1,0 +1,93 @@
+# =====================================================================
+# Java - view layer (JSP / Thymeleaf / FreeMarker templates)
+# ---------------------------------------------------------------------
+# The repo had no Java frontend rules. Templates are not Java source, so
+# these are regex rules scoped to template file extensions.
+# =====================================================================
+rules:
+  - id: javafe-jsp-scriptlet-request-output
+    languages: [generic]
+    severity: ERROR
+    message: >
+      JSP expression prints request data without encoding
+      (<%= request.getParameter(...) %>). Reflected XSS. Use
+      <c:out value="${param.x}"/> or fn:escapeXml.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: HIGH
+      ad-impact: session-theft
+    paths:
+      include: ["*.jsp", "*.jspx", "*.jspf"]
+    pattern-regex: <%=\s*request\.(getParameter|getHeader|getQueryString|getAttribute|getRequestURI)\s*\(
+
+  - id: javafe-jsp-el-unescaped
+    languages: [generic]
+    severity: WARNING
+    message: >
+      JSP EL ${param.x} / ${header.x} / ${cookie.x} written directly into the
+      page. EL in template text is NOT escaped. Wrap in <c:out> or
+      ${fn:escapeXml(...)}.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    paths:
+      include: ["*.jsp", "*.jspx", "*.jspf"]
+    patterns:
+      - pattern-regex: \$\{\s*(param|paramValues|header|cookie)\b[^}]*\}
+      - pattern-not-regex: (c:out|fn:escapeXml)[^>]*\$\{\s*(param|paramValues|header|cookie)\b[^}]*\}
+
+  - id: javafe-thymeleaf-utext
+    languages: [generic]
+    severity: WARNING
+    message: >
+      th:utext / [(${...})] render HTML without escaping. If the value is
+      user-controlled (notes, profile, comments) this is stored XSS. Use
+      th:text / [[${...}]].
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    paths:
+      include: ["*.html", "*.htm"]
+    pattern-either:
+      - pattern-regex: th:utext\s*=\s*"[^"]*\$\{
+      - pattern-regex: \[\(\s*\$\{[^}]+\}\s*\)\]
+
+  - id: javafe-thymeleaf-preprocessing
+    languages: [generic]
+    severity: ERROR
+    message: >
+      Thymeleaf preprocessing __${...}__ evaluates the inner value as an
+      expression. If it contains user input -> SpEL injection -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-917
+      confidence: MEDIUM
+      ad-impact: rce
+    paths:
+      include: ["*.html", "*.htm"]
+    pattern-regex: __\$\{[^}]+\}__
+
+  - id: javafe-freemarker-noescape
+    languages: [generic]
+    severity: WARNING
+    message: >
+      FreeMarker ?no_esc / <#noautoesc> / ?interpret. Disables escaping
+      (XSS) or evaluates a string as a template (SSTI -> RCE via
+      "freemarker.template.utility.Execute"?new()).
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: rce
+    paths:
+      include: ["*.ftl", "*.ftlh", "*.ftlx"]
+    pattern-either:
+      - pattern-regex: \?no_esc\b
+      - pattern-regex: <#noautoesc>
+      - pattern-regex: \?interpret\b
+      - pattern-regex: freemarker\.template\.utility\.Execute

@@ -1,0 +1,78 @@
+# =====================================================================
+# Dockerfile - vulnbox image misconfigurations
+# =====================================================================
+rules:
+  - id: dockerfile-secret-in-env-or-arg
+    languages: [dockerfile]
+    severity: WARNING
+    message: >
+      Secret baked into the image with ENV/ARG. Identical for every team and
+      visible in 'docker history'. Rotate it on your vulnbox.
+    metadata:
+      category: security
+      cwe: CWE-798
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    # ENV KEY=value / ENV KEY value / ARG KEY=default (value not a ${VAR} reference)
+    pattern-regex: (?im)^\s*(ENV|ARG)\s+(.*\s)?\w*(secret|password|passwd|jwt|token|api_?key|private_?key|signing|session_key|app_key)\w*(\s*=\s*|\s+)["']?[^\s"'$]+
+
+  - id: dockerfile-debug-mode
+    languages: [dockerfile]
+    severity: WARNING
+    message: >
+      Service started in debug/development mode (flask --debug, DEBUG=1,
+      NODE_ENV=development, rails s -e development, uvicorn --reload...).
+      Leaks stack traces/env and may expose an interactive console.
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: MEDIUM
+      ad-impact: rce
+    pattern-either:
+      - pattern-regex: (?im)^\s*ENV\s+.*\b(FLASK_DEBUG|DEBUG|APP_DEBUG|DJANGO_DEBUG)[= ]["']?(1|true|yes|on)\b
+      - pattern-regex: (?im)^\s*ENV\s+.*\b(FLASK_ENV|NODE_ENV|RAILS_ENV|APP_ENV|ASPNETCORE_ENVIRONMENT)[= ]["']?(development|dev|debug)\b
+      - pattern-regex: (?im)^\s*(CMD|ENTRYPOINT)\b.*(--debug\b|--reload\b|runserver\b|-e\s+development|nodemon\b)
+
+  - id: dockerfile-world-writable
+    languages: [dockerfile]
+    severity: WARNING
+    message: >
+      chmod 777 / a+w inside the image. Any process (another compromised
+      service, the low-priv app user) can tamper with code or data.
+    metadata:
+      category: security
+      cwe: CWE-732
+      confidence: HIGH
+      ad-impact: integrity
+    pattern-regex: (?im)^\s*RUN\b.*\bchmod\s+(-R\s+)?(0?777|a\+w|o\+w|ugo\+w)\b
+
+  - id: dockerfile-setuid-or-sudo-nopasswd
+    languages: [dockerfile]
+    severity: WARNING
+    message: >
+      SUID bit set or passwordless sudo configured in the image. Turns any
+      RCE in the service into root inside the container.
+    metadata:
+      category: security
+      cwe: CWE-250
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern-regex: (?im)^\s*RUN\b.*\bchmod\s+(-R\s+)?([ugoa]*\+s|[2467][0-7]{3})\b
+      - pattern-regex: (?im)NOPASSWD\s*:\s*ALL
+
+  - id: dockerfile-remote-add
+    languages: [dockerfile]
+    severity: INFO
+    message: >
+      ADD from a URL / curl | sh during build. Not exploitable by other
+      teams, but if the game network intercepts build traffic or the URL
+      changes, the image is poisoned. Pin a checksum.
+    metadata:
+      category: security
+      cwe: CWE-494
+      confidence: MEDIUM
+      ad-impact: integrity
+    pattern-either:
+      - pattern-regex: (?im)^\s*ADD\s+https?://
+      - pattern-regex: (?im)^\s*RUN\b.*\b(curl|wget)\b[^|]*\|\s*(ba)?sh\b

@@ -1,0 +1,247 @@
+# =====================================================================
+# C# (ASP.NET Core) - Attack & Defense logic bugs and dangerous config
+# =====================================================================
+rules:
+  - id: cs-jwt-validation-disabled
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      JWT validation weakened in TokenValidationParameters (signature,
+      signing key, lifetime or signed-token requirement disabled, or a
+      custom SignatureValidator that skips the check). Forged tokens pass.
+    metadata:
+      category: security
+      cwe: CWE-347
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: ValidateIssuerSigningKey = false
+      - pattern: RequireSignedTokens = false
+      - pattern: ValidateLifetime = false
+      - pattern: RequireExpirationTime = false
+      - pattern: '$P.ValidateIssuerSigningKey = false'
+      - pattern: '$P.RequireSignedTokens = false'
+      - pattern: 'SignatureValidator = ($T, $P) => new JwtSecurityToken($T)'
+      - pattern: 'SignatureValidator = ($T, $P) => new JsonWebToken($T)'
+      - pattern: new JwtSecurityTokenHandler().ReadJwtToken($T)
+
+  - id: cs-hardcoded-signing-key
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      JWT / cookie signing key is a string literal. Every team has it ->
+      forge tokens for any user. Load it from configuration you change on
+      your vulnbox, or generate it at startup.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: new SymmetricSecurityKey(Encoding.UTF8.GetBytes("..."))
+      - pattern: new SymmetricSecurityKey(Encoding.ASCII.GetBytes("..."))
+      - pattern: new SymmetricSecurityKey(Encoding.Default.GetBytes("..."))
+      - pattern: new HMACSHA256(Encoding.UTF8.GetBytes("..."))
+
+  - id: cs-insecure-deserializer
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Insecure deserializer / Json.NET TypeNameHandling other than None.
+      "$type" in attacker JSON instantiates arbitrary classes -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern: new BinaryFormatter()
+      - pattern: new NetDataContractSerializer(...)
+      - pattern: new SoapFormatter()
+      - pattern: new LosFormatter(...)
+      - pattern: new ObjectStateFormatter()
+      - pattern: new JavaScriptSerializer(new SimpleTypeResolver())
+      - pattern: TypeNameHandling = TypeNameHandling.All
+      - pattern: TypeNameHandling = TypeNameHandling.Auto
+      - pattern: TypeNameHandling = TypeNameHandling.Objects
+      - pattern: TypeNameHandling = TypeNameHandling.Arrays
+
+  - id: cs-weak-random-token
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      System.Random is predictable (and new Random(seed) is fully
+      reproducible). Use RandomNumberGenerator for tokens, IDs, passwords.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: new Random()
+      - pattern: new Random($SEED)
+      - pattern: Random.Shared.$M(...)
+
+  - id: cs-timing-unsafe-secret-compare
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with == / Equals. Use
+      CryptographicOperations.FixedTimeEquals and re-check the logic.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+          - pattern: $A.Equals($B)
+          - pattern: string.Equals($A, $B, ...)
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|api_?key|apikey|otp|nonce)\b.*
+      - pattern-not: $A == null
+      - pattern-not: $A != null
+
+  - id: cs-ef-raw-sql-interpolation
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      FromSqlRaw / ExecuteSqlRaw with an interpolated or concatenated string
+      is SQL injection (the Raw variants do not parameterize $"{x}"). Use
+      FromSqlInterpolated / FromSql or explicit parameters.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: $SET.FromSqlRaw($"...", ...)
+      - pattern: $SET.FromSqlRaw($A + $B, ...)
+      - pattern: $SET.FromSqlRaw(string.Format(...), ...)
+      - pattern: $DB.Database.ExecuteSqlRaw($"...", ...)
+      - pattern: $DB.Database.ExecuteSqlRaw($A + $B, ...)
+      - pattern: $DB.Database.ExecuteSqlRawAsync($"...", ...)
+      - pattern: new SqlCommand($"...", ...)
+      - pattern: new SqlCommand($A + $B, ...)
+
+  - id: cs-mass-assignment-entity-binding
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Request body bound straight into an EF entity that is added/updated.
+      Role/IsAdmin/OwnerId are attacker-controlled (overposting). Bind a DTO
+      and copy allowed fields.
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: |
+          public $RET $M(..., [FromBody] $T $E, ...) {
+            ...
+            $DB.$SET.Add($E);
+            ...
+          }
+      - pattern: |
+          public async $RET $M(..., [FromBody] $T $E, ...) {
+            ...
+            $DB.$SET.Add($E);
+            ...
+          }
+      - pattern: |
+          public $RET $M(..., [FromBody] $T $E, ...) {
+            ...
+            $DB.Update($E);
+            ...
+          }
+      - pattern: |
+          public async $RET $M(..., [FromBody] $T $E, ...) {
+            ...
+            $DB.Update($E);
+            ...
+          }
+
+  - id: cs-tls-validation-disabled
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Server certificate validation callback always returns true. Any MITM
+      (other teams on the game network) can read/alter the traffic.
+    metadata:
+      category: security
+      cwe: CWE-295
+      confidence: HIGH
+      ad-impact: integrity
+    pattern-either:
+      - pattern: $H.ServerCertificateCustomValidationCallback = ($A, $B, $C, $D) => true
+      - pattern: ServerCertificateCustomValidationCallback = ($A, $B, $C, $D) => true
+      - pattern: ServicePointManager.ServerCertificateValidationCallback += ($A, $B, $C, $D) => true
+      - pattern: ServicePointManager.ServerCertificateValidationCallback = ($A, $B, $C, $D) => true
+      - pattern: HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+
+  - id: cs-xxe-unsafe-xml
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      XML parser with DTD processing / an XmlUrlResolver enabled. External
+      entities read local files (/flag) or perform SSRF.
+    metadata:
+      category: security
+      cwe: CWE-611
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: DtdProcessing = DtdProcessing.Parse
+      - pattern: $S.DtdProcessing = DtdProcessing.Parse
+      - pattern: XmlResolver = new XmlUrlResolver()
+      - pattern: $D.XmlResolver = new XmlUrlResolver()
+      - pattern: ProhibitDtd = false
+
+  - id: cs-dev-exception-page-or-open-cors
+    languages: [csharp]
+    severity: WARNING
+    message: >
+      Developer exception page enabled unconditionally (stack traces, source,
+      config values), or CORS allowing any origin together with credentials.
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    patterns:
+      - pattern-either:
+          - pattern: $APP.UseDeveloperExceptionPage()
+          - pattern: $P.AllowAnyOrigin().AllowCredentials()
+          - pattern: $P.SetIsOriginAllowed($X => true).AllowCredentials()
+          - pattern: $P.AllowCredentials().SetIsOriginAllowed($X => true)
+      - pattern-not-inside: |
+          if ($ENV.IsDevelopment()) { ... }
+      - pattern-not-inside: |
+          if (app.Environment.IsDevelopment()) { ... }
+
+  - id: cs-ip-or-cookie-based-auth
+    languages: [csharp]
+    severity: ERROR
+    message: >
+      Authorization decided from X-Forwarded-For / X-Real-IP or from a plain
+      cookie value (role/admin/userId). Both are client-controlled.
+    metadata:
+      category: security
+      cwe: CWE-290
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: Request.Headers["X-Forwarded-For"]
+      - pattern: Request.Headers["X-Real-IP"]
+      - pattern: $CTX.Request.Headers["X-Forwarded-For"]
+      - patterns:
+          - pattern-either:
+              - pattern: Request.Cookies[$K]
+              - pattern: $CTX.Request.Cookies[$K]
+          - metavariable-regex:
+              metavariable: $K
+              regex: (?i)^"(is_?admin|admin|role|level|user_?id|uid|userid|username|user|auth)"$

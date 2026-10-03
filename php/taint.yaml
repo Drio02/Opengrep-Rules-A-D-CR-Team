@@ -1,0 +1,699 @@
+# =====================================================================
+# PHP - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources: superglobals, php://input, Laravel and Symfony request objects.
+# Follows the value through variables and string concatenation, which the
+# syntactic rules in backend.yaml / php.yaml cannot see.
+# =====================================================================
+rules:
+  - id: php-taint-sqli
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL query. Use prepared statements with bound
+      parameters (PDO::prepare + execute([$v])). Escaping without quotes
+      around the value is NOT enough.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: intval(...)
+      - pattern: floatval(...)
+      - pattern: (int) $X
+      - pattern: (float) $X
+      - pattern: $PDO->quote(...)
+      - pattern: ctype_digit(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: mysqli_query($C, $Q, ...)
+              - pattern: mysqli_multi_query($C, $Q, ...)
+              - pattern: mysql_query($Q, ...)
+              - pattern: pg_query($C, $Q)
+              - pattern: pg_query($Q)
+              - pattern: sqlite_query($C, $Q, ...)
+              - pattern: $DB->query($Q, ...)
+              - pattern: $DB->exec($Q, ...)
+              - pattern: $DB->prepare($Q, ...)
+              - pattern: $DB->querySingle($Q, ...)
+              - pattern: $DB->multi_query($Q, ...)
+              - pattern: $DB->real_query($Q, ...)
+              - pattern: DB::raw($Q, ...)
+              - pattern: DB::select($Q, ...)
+              - pattern: DB::statement($Q, ...)
+              - pattern: DB::unprepared($Q, ...)
+              - pattern: $QB->whereRaw($Q, ...)
+              - pattern: $QB->orderByRaw($Q, ...)
+              - pattern: $QB->selectRaw($Q, ...)
+              - pattern: $QB->havingRaw($Q, ...)
+          - focus-metavariable: $Q
+
+  - id: php-taint-command-injection
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches a shell command. Wrap every argument in
+      escapeshellarg() (escapeshellcmd alone still allows argument injection).
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: escapeshellarg(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: system($C, ...)
+              - pattern: exec($C, ...)
+              - pattern: shell_exec($C)
+              - pattern: passthru($C, ...)
+              - pattern: popen($C, ...)
+              - pattern: proc_open($C, ...)
+              - pattern: pcntl_exec($C, ...)
+              - pattern: mail($TO, $SUBJ, $MSG, $HDR, $C)
+          - focus-metavariable: $C
+
+  - id: php-taint-code-injection
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches eval/assert/create_function or is used as a
+      function name / callback. Direct RCE (?f=system&a=id).
+    metadata:
+      category: security
+      cwe: CWE-95
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($X)
+              - pattern: assert($X, ...)
+              - pattern: create_function($A, $X)
+              - pattern: call_user_func($X, ...)
+              - pattern: call_user_func_array($X, ...)
+              - pattern: array_map($X, ...)
+              - pattern: array_filter($A, $X, ...)
+              - pattern: usort($A, $X)
+              - pattern: register_shutdown_function($X, ...)
+              - pattern: $X(...)
+              - pattern: new $X(...)
+          - focus-metavariable: $X
+
+  - id: php-taint-file-inclusion
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches include/require. LFI -> read source/flags, and RCE
+      via php://filter chains, log poisoning, session files or uploads.
+      Map the parameter to a fixed allowlist of files.
+    metadata:
+      category: security
+      cwe: CWE-98
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: basename(...)
+    pattern-sinks:
+      - pattern: include $X;
+      - pattern: include_once $X;
+      - pattern: require $X;
+      - pattern: require_once $X;
+
+  - id: php-taint-path-traversal
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches a filesystem function. "../" escapes the base dir,
+      and phar:// on ANY of these triggers deserialization. Use basename()
+      and compare realpath() against the base directory.
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: basename(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $FN($P, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(file_get_contents|file_put_contents|fopen|readfile|file|unlink|copy|rename|rmdir|mkdir|scandir|opendir|glob|is_file|file_exists|filesize|show_source|highlight_file|parse_ini_file|simplexml_load_file|md5_file|getimagesize|touch|chmod)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: move_uploaded_file($TMP, $P)
+              - pattern: new SplFileObject($P, ...)
+              - pattern: response()->download($P, ...)
+              - pattern: response()->file($P, ...)
+          - focus-metavariable: $P
+
+  - id: php-taint-ssrf
+    mode: taint
+    languages: [php]
+    severity: WARNING
+    message: >
+      User input controls the URL of a server-side request (curl /
+      file_get_contents / Guzzle). Allowlist scheme+host; also block gopher://,
+      file://, dict:// and private IP ranges.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: curl_init($U)
+              - pattern: curl_setopt($CH, CURLOPT_URL, $U)
+              - pattern: get_headers($U, ...)
+              - pattern: $CLIENT->request($M, $U, ...)
+              - pattern: $CLIENT->get($U, ...)
+              - pattern: Http::get($U, ...)
+              - pattern: Http::post($U, ...)
+          - focus-metavariable: $U
+
+  - id: php-taint-deserialization
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input reaches unserialize(). Object injection -> POP chain (magic
+      methods __wakeup/__destruct/__toString) -> RCE or file write. Use
+      json_decode, or unserialize($x, ['allowed_classes' => false]).
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern: unserialize($D, ...)
+          - pattern-not: "unserialize($D, ['allowed_classes' => false])"
+          - pattern-not: "unserialize($D, array('allowed_classes' => false))"
+          - focus-metavariable: $D
+
+  - id: php-taint-xss
+    mode: taint
+    languages: [php]
+    severity: WARNING
+    message: >
+      User input echoed into the page without htmlspecialchars(). Reflected/
+      stored XSS (steal the checker bot's session).
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: MEDIUM
+      ad-impact: session-theft
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: htmlspecialchars(...)
+      - pattern: htmlentities(...)
+      - pattern: intval(...)
+      - pattern: (int) $X
+      - pattern: json_encode(...)
+      - pattern: urlencode(...)
+      - pattern: e(...)
+    pattern-sinks:
+      - pattern: echo $X;
+      - pattern: print $X;
+      - pattern: printf(...)
+      - pattern: die($X)
+      - pattern: exit($X)
+
+  - id: php-taint-ssti
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      User input used as TEMPLATE SOURCE (Twig createTemplate, Smarty
+      string:/eval:, Blade::render). SSTI -> RCE ({{['id']|filter('system')}}).
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $TWIG->createTemplate($T, ...)
+              - pattern: $SMARTY->fetch($T, ...)
+              - pattern: $SMARTY->display($T, ...)
+              - pattern: Blade::render($T, ...)
+              - pattern: $ENV->render($T, ...)
+          - focus-metavariable: $T
+
+  - id: php-taint-open-redirect-header-injection
+    mode: taint
+    languages: [php]
+    severity: WARNING
+    message: >
+      User input reaches header(). Open redirect via Location, and header
+      injection on old PHP. Allow only relative paths or allowlisted hosts.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: header($H, ...)
+              - pattern: redirect($H, ...)
+              - pattern: redirect()->to($H, ...)
+          - focus-metavariable: $H
+
+  - id: php-taint-variable-overwrite
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      extract() / parse_str() without a result array on user input overwrites
+      local variables ($is_admin, $user_id, $sql...). Classic A&D/CTF auth
+      bypass. Use parse_str($s, $out) and read keys explicitly.
+    metadata:
+      category: security
+      cwe: CWE-621
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: extract($X)
+              - pattern: extract($X, EXTR_OVERWRITE)
+              - pattern: parse_str($X)
+              - pattern: mb_parse_str($X)
+              - pattern: import_request_variables(...)
+          - focus-metavariable: $X
+
+  - id: php-taint-regex-injection
+    mode: taint
+    languages: [php]
+    severity: WARNING
+    message: >
+      User input used as a regex pattern. ReDoS, and with old PHP the /e
+      modifier = RCE. Use preg_quote().
+    metadata:
+      category: security
+      cwe: CWE-1333
+      confidence: MEDIUM
+      ad-impact: dos
+    pattern-sources:
+      - pattern: $_GET
+      - pattern: $_POST
+      - pattern: $_REQUEST
+      - pattern: $_COOKIE
+      - pattern: $_FILES
+      - pattern: $_SERVER['HTTP_USER_AGENT']
+      - pattern: $_SERVER['HTTP_REFERER']
+      - pattern: $_SERVER['QUERY_STRING']
+      - pattern: $_SERVER['REQUEST_URI']
+      - pattern: $_SERVER['PHP_SELF']
+      - pattern: $_SERVER['HTTP_X_FORWARDED_FOR']
+      - pattern: file_get_contents('php://input')
+      - pattern: getallheaders()
+      - pattern: $request->input(...)
+      - pattern: $request->get(...)
+      - pattern: $request->query(...)
+      - pattern: $request->post(...)
+      - pattern: $request->all(...)
+      - pattern: $request->cookie(...)
+      - pattern: $request->header(...)
+      - pattern: $request->getContent(...)
+      - pattern: $request->query->get(...)
+      - pattern: $request->request->get(...)
+      - pattern: $request->cookies->get(...)
+      - pattern: $request->headers->get(...)
+      - pattern: request(...)
+      - pattern: Request::input(...)
+      - pattern: Request::get(...)
+    pattern-sanitizers:
+      - pattern: preg_quote(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: preg_match($R, ...)
+              - pattern: preg_match_all($R, ...)
+              - pattern: preg_replace($R, ...)
+              - pattern: preg_split($R, ...)
+          - focus-metavariable: $R
+
+  - id: php-taint-upload-filename
+    mode: taint
+    languages: [php]
+    severity: ERROR
+    message: >
+      Uploaded file stored using the client-supplied name. Upload shell.php
+      (or .phtml/.phar/.htaccess) into the web root -> RCE. Generate the
+      name server-side (bin2hex(random_bytes(16))) and allowlist extensions.
+    metadata:
+      category: security
+      cwe: CWE-434
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: $_FILES[$K]['name']
+      - pattern: $_FILES[$K]["name"]
+      - pattern: $FILE->getClientOriginalName()
+      - pattern: $FILE->getClientOriginalExtension()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: move_uploaded_file($TMP, $DEST)
+              - pattern: copy($TMP, $DEST)
+              - pattern: file_put_contents($DEST, ...)
+              - pattern: $FILE->move($DIR, $DEST)
+              - pattern: $FILE->storeAs($DIR, $DEST, ...)
+          - focus-metavariable: $DEST

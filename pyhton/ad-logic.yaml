@@ -1,0 +1,311 @@
+# =====================================================================
+# Python - Attack & Defense logic bugs
+# ---------------------------------------------------------------------
+# Bugs that are not "classic injection" but are the bread and butter of
+# A&D services: forgeable sessions, predictable tokens, timing leaks,
+# mass assignment, auth checks that disappear, unauthenticated admin
+# routes. Most of them lead directly to reading other teams' flags.
+# =====================================================================
+rules:
+  - id: py-hardcoded-flask-secret-key
+    languages: [python]
+    severity: ERROR
+    message: >
+      Flask/Django SECRET_KEY hardcoded in source. Every team gets the same
+      source, so every team can forge session cookies (flask-unsign) and log
+      in as any user. Patch: load from os.environ or os.urandom(32) at boot.
+    metadata:
+      category: security
+      cwe: CWE-798
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $APP.secret_key = "..."
+      - pattern: $APP.config["SECRET_KEY"] = "..."
+      - pattern: $APP.config['JWT_SECRET_KEY'] = "..."
+      - pattern: $APP.config.update(..., SECRET_KEY="...", ...)
+      - pattern: $APP.config.update(..., JWT_SECRET_KEY="...", ...)
+      - pattern: Flask(...).secret_key = "..."
+
+  - id: py-jwt-hardcoded-key
+    languages: [python]
+    severity: ERROR
+    message: >
+      JWT signed/verified with a string literal key. The key is public to all
+      teams: anyone can mint tokens for any user. Rotate it on your box.
+    metadata:
+      category: security
+      cwe: CWE-321
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: jwt.encode($P, "...", ...)
+      - pattern: jwt.decode($T, "...", ...)
+      - pattern: jwt.encode($P, key="...", ...)
+      - pattern: jwt.decode($T, key="...", ...)
+
+  - id: py-weak-random-token
+    languages: [python]
+    severity: WARNING
+    message: >
+      'random' module is a Mersenne Twister: outputs are predictable (and
+      fully recoverable after 624 outputs). If this value is a token, id,
+      password, reset code or filename, use the 'secrets' module.
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: random.choice(...)
+      - pattern: random.choices(...)
+      - pattern: random.randint(...)
+      - pattern: random.randrange(...)
+      - pattern: random.getrandbits(...)
+      - pattern: random.random()
+      - pattern: random.sample(...)
+      - pattern: random.randbytes(...)
+
+  - id: py-random-seed-predictable
+    languages: [python]
+    severity: ERROR
+    message: >
+      PRNG seeded with time or a constant. Attackers can brute-force the seed
+      and regenerate every "random" token/ID the service issued.
+    metadata:
+      category: security
+      cwe: CWE-335
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: random.seed(time.time())
+      - pattern: random.seed(int(time.time()))
+      - pattern: random.seed(int(time.time() * $X))
+      - pattern: random.seed(<... time.time() ...>)
+      - pattern: random.seed(datetime.datetime.now().$M(...))
+      - pattern: random.Random(time.time())
+      - pattern: random.Random(int(time.time()))
+      # random.seed(1337), random.seed("s3cr3t"), ...
+      - patterns:
+          - pattern: random.seed($LITERAL)
+          - metavariable-regex:
+              metavariable: $LITERAL
+              regex: ^(-?\d+|"[^"]*"|'[^']*')$
+
+  - id: py-timing-unsafe-secret-compare
+    languages: [python]
+    severity: WARNING
+    message: >
+      Secret/token/signature compared with == or !=. Not constant time and,
+      more importantly in A&D, often the ONLY auth check. Use
+      hmac.compare_digest() and double check what is being compared.
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: $A == $B
+          - pattern: $A != $B
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(token|secret|signature|hmac|digest|api_?key|passw|otp|nonce|mac)\b.*
+      - pattern-not: $A == None
+      - pattern-not: $A != None
+      - pattern-not: $A == ""
+      - pattern-not: $A != ""
+
+  - id: py-mass-assignment
+    languages: [python]
+    severity: ERROR
+    message: >
+      Request body unpacked straight into a model/object. Attacker adds
+      {"is_admin": true, "role": "admin", "user_id": <victim>} to the JSON.
+      Copy an explicit allowlist of fields.
+    metadata:
+      category: security
+      cwe: CWE-915
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: $MODEL(**request.json)
+      - pattern: $MODEL(**request.get_json(...))
+      - pattern: $MODEL(**request.form)
+      - pattern: $MODEL(**request.args)
+      - pattern: $MODEL(**request.POST.dict())
+      - pattern: $MODEL(**$BODY.dict())
+      - pattern: $MODEL(**$BODY.model_dump())
+      - pattern: $OBJ.__dict__.update(request.$X)
+      - pattern: $OBJ.__dict__.update(request.get_json(...))
+      - pattern: $OBJ.update(**request.json)
+      - pattern: $OBJ.update(**request.get_json(...))
+      - pattern: |
+          for $K, $V in request.$X.items():
+              ...
+              setattr($OBJ, $K, $V)
+      - pattern: |
+          for $K, $V in $DATA.items():
+              ...
+              setattr($OBJ, $K, $V)
+
+  - id: py-assert-used-for-auth
+    languages: [python]
+    severity: ERROR
+    message: >
+      Security check implemented with assert. Asserts are stripped under
+      'python -O' (and raise 500 instead of 403). Use an explicit if/abort(403).
+    metadata:
+      category: security
+      cwe: CWE-617
+      confidence: HIGH
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: assert $COND
+          - pattern: assert $COND, $MSG
+      - metavariable-regex:
+          metavariable: $COND
+          regex: (?i).*(admin|auth|owner|user_?id|role|perm|login|token|logged|allowed|session).*
+
+  - id: py-sensitive-route-without-auth
+    languages: [python]
+    severity: WARNING
+    message: >
+      Route with a sensitive path (admin/flag/export/debug/...) and no auth
+      decorator. Verify it checks the session inside the handler; if not,
+      this is a free flag endpoint.
+    metadata:
+      category: security
+      cwe: CWE-306
+      confidence: LOW
+      ad-impact: flag-leak
+    patterns:
+      - pattern-either:
+          - pattern: |
+              @$APP.$ROUTE($PATH, ...)
+              def $F(...):
+                  ...
+          - pattern: |
+              @$APP.$ROUTE($PATH, ...)
+              async def $F(...):
+                  ...
+      - metavariable-regex:
+          metavariable: $ROUTE
+          regex: ^(route|get|post|put|patch|delete)$
+      - metavariable-regex:
+          metavariable: $PATH
+          regex: (?i).*(admin|flag|secret|internal|debug|export|backup|dump|all|delete|config|users).*
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          @$DECO
+          def $F(...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          @$DECO(...)
+          def $F(...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          @$DECO
+          async def $F(...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          @$DECO(...)
+          async def $F(...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ..., dependencies=$D, ...)
+          async def $F(...):
+              ...
+      # handler checks the session / identity itself
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(...):
+              ...
+              <... current_user ...>
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(...):
+              ...
+              <... session ...>
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(...):
+              ...
+              <... get_jwt_identity() ...>
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(..., $U = Depends(...), ...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          async def $F(..., $U = Depends(...), ...):
+              ...
+
+  - id: py-django-debug-or-wildcard-hosts
+    languages: [python]
+    severity: WARNING
+    message: >
+      Django DEBUG=True leaks settings, SQL queries and stack traces (with
+      local variables) on every error page.
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: DEBUG = True
+      - pattern: $APP.config["DEBUG"] = True
+      - pattern: $APP.debug = True
+
+  - id: py-werkzeug-debugger-or-pin-disabled
+    languages: [python]
+    severity: ERROR
+    message: >
+      Werkzeug debugger enabled (use_debugger / WERKZEUG_DEBUG_PIN=off).
+      /console gives an interactive Python shell -> RCE.
+    metadata:
+      category: security
+      cwe: CWE-489
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern: run_simple(..., use_debugger=True, ...)
+      - pattern: DebuggedApplication($APP, evalex=True, ...)
+      - pattern: os.environ["WERKZEUG_DEBUG_PIN"] = "off"
+
+  - id: py-tempfile-mktemp
+    languages: [python]
+    severity: WARNING
+    message: >
+      tempfile.mktemp() returns a name but does not create the file: race
+      condition / symlink attack. Use NamedTemporaryFile or mkstemp.
+    metadata:
+      category: security
+      cwe: CWE-377
+      confidence: HIGH
+      ad-impact: integrity
+    pattern: tempfile.mktemp(...)
+
+  - id: py-sql-order-by-limit-format
+    languages: [python]
+    severity: ERROR
+    message: >
+      ORDER BY / GROUP BY / LIMIT / OFFSET built from a variable. These
+      positions cannot be parameterized, so devs format them in and forget
+      to allowlist. Map the user value to a fixed set of column names.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern-regex: (?i)\bf["'][^"'\n]*\b(order\s+by|group\s+by|limit|offset)\s+["'`]?\{
+      - pattern-regex: (?i)["'][^"'\n]*\b(order\s+by|group\s+by|limit|offset)\s+["'`]?(%s|%\(\w+\)s|\{\w*\})[^"'\n]*["']\s*(%|\.format)
+      - pattern-regex: (?i)["'][^"'\n]*\b(order\s+by|group\s+by|limit|offset)\s*["']\s*\+

@@ -1,0 +1,544 @@
+# =====================================================================
+# Java (Spring / Servlet / JAX-RS) - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources: Spring controller parameters (@RequestParam, @PathVariable,
+# @RequestBody, @RequestHeader, @CookieValue, @ModelAttribute), JAX-RS
+# (@QueryParam, @PathParam, @FormParam, @HeaderParam) and the Servlet API.
+# =====================================================================
+rules:
+  - id: java-taint-sqli
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL/JPQL/HQL string. Use PreparedStatement
+      with '?' placeholders or named parameters (:id) with setParameter.
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sanitizers:
+      - pattern: Integer.parseInt(...)
+      - pattern: Integer.valueOf(...)
+      - pattern: Long.parseLong(...)
+      - pattern: Long.valueOf(...)
+      - pattern: UUID.fromString(...)
+      - pattern: (int $X)
+      - pattern: (long $X)
+      - pattern: (Integer $X)
+      - pattern: (Long $X)
+      - pattern: (UUID $X)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (java.sql.Statement $S).executeQuery($Q)
+              - pattern: (java.sql.Statement $S).execute($Q, ...)
+              - pattern: (java.sql.Statement $S).executeUpdate($Q, ...)
+              - pattern: (java.sql.Statement $S).addBatch($Q)
+              - pattern: $S.executeQuery($Q)
+              - pattern: $S.executeUpdate($Q)
+              - pattern: $CONN.prepareStatement($Q, ...)
+              - pattern: $CONN.prepareCall($Q, ...)
+              - pattern: $CONN.nativeSQL($Q)
+              - pattern: $EM.createQuery($Q, ...)
+              - pattern: $EM.createNativeQuery($Q, ...)
+              - pattern: $SESSION.createSQLQuery($Q)
+              - pattern: (JdbcTemplate $J).$FN($Q, ...)
+              - pattern: (NamedParameterJdbcTemplate $J).$FN($Q, ...)
+          - focus-metavariable: $Q
+
+  - id: java-taint-command-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input reaches Runtime.exec / ProcessBuilder. With "sh -c" it is
+      full command injection; as an argument it can be argument injection.
+      Use a fixed binary and validated, separate arguments.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sanitizers:
+      - pattern: Integer.parseInt(...)
+      - pattern: Integer.valueOf(...)
+      - pattern: Long.parseLong(...)
+      - pattern: Long.valueOf(...)
+      - pattern: UUID.fromString(...)
+      - pattern: (int $X)
+      - pattern: (long $X)
+      - pattern: (Integer $X)
+      - pattern: (Long $X)
+      - pattern: (UUID $X)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Runtime.getRuntime().exec($X, ...)
+              - pattern: (Runtime $R).exec($X, ...)
+              - pattern: new ProcessBuilder($X, ...)
+              - pattern: new ProcessBuilder(..., $X)
+              - pattern: (ProcessBuilder $PB).command($X, ...)
+              - pattern: (ProcessBuilder $PB).command(..., $X)
+          - focus-metavariable: $X
+
+  - id: java-taint-code-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input evaluated as an expression or script (SpEL, OGNL, MVEL, EL,
+      ScriptEngine, Groovy) or used for reflection. RCE:
+      T(java.lang.Runtime).getRuntime().exec('id').
+    metadata:
+      category: security
+      cwe: CWE-917
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $PARSER.parseExpression($X, ...)
+              - pattern: (ScriptEngine $E).eval($X, ...)
+              - pattern: $ELP.createValueExpression($CTX, $X, ...)
+              - pattern: $ELP.createMethodExpression($CTX, $X, ...)
+              - pattern: Ognl.getValue($X, ...)
+              - pattern: Ognl.parseExpression($X)
+              - pattern: MVEL.eval($X, ...)
+              - pattern: new GroovyShell(...).evaluate($X, ...)
+              - pattern: (GroovyShell $G).evaluate($X, ...)
+              - pattern: Class.forName($X, ...)
+              - pattern: $CL.loadClass($X, ...)
+              - pattern: $CLS.getMethod($X, ...)
+              - pattern: $CLS.getDeclaredMethod($X, ...)
+          - focus-metavariable: $X
+
+  - id: java-taint-path-traversal
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input reaches a file path. new File(base, name) and
+      Paths.get(base, name) do not stop "../". Normalize and check
+      resolved.startsWith(base), or keep only getFileName().
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sanitizers:
+      - pattern: FilenameUtils.getName(...)
+      - pattern: $P.getFileName()
+      - pattern: Integer.parseInt(...)
+      - pattern: (int $X)
+      - pattern: (long $X)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new File($P)
+              - pattern: new File($BASE, $P)
+              - pattern: Paths.get(..., $P, ...)
+              - pattern: Path.of(..., $P, ...)
+              - pattern: $BASEPATH.resolve($P)
+              - pattern: new FileInputStream($P)
+              - pattern: new FileOutputStream($P, ...)
+              - pattern: new FileReader($P)
+              - pattern: new FileWriter($P, ...)
+              - pattern: new RandomAccessFile($P, ...)
+              - pattern: new FileSystemResource($P)
+              - pattern: new UrlResource($P)
+              - pattern: $LOADER.getResource($P)
+          - focus-metavariable: $P
+
+  - id: java-taint-ssrf
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    message: >
+      User input controls the URL of a server-side request (URL,
+      RestTemplate, WebClient, HttpClient, OkHttp, Jsoup). Allowlist host
+      and scheme; block loopback/private ranges. new URL() also allows
+      file:// and jar://.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new URL($U)
+              - pattern: URI.create($U)
+              - pattern: new URI($U)
+              - pattern: (RestTemplate $RT).$FN($U, ...)
+              - pattern: $WC.get().uri($U, ...)
+              - pattern: $WC.post().uri($U, ...)
+              - pattern: new HttpGet($U)
+              - pattern: new HttpPost($U)
+              - pattern: new Request.Builder().url($U)
+              - pattern: $BUILDER.url($U)
+              - pattern: Jsoup.connect($U)
+          - focus-metavariable: $U
+
+  - id: java-taint-deserialization
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input reaches a deserializer that instantiates arbitrary classes
+      (ObjectInputStream, XMLDecoder, XStream, SnakeYAML, Kryo, Hessian).
+      Gadget chains (ysoserial) -> RCE. Use JSON into fixed DTO types.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new ObjectInputStream($D)
+              - pattern: new XMLDecoder($D, ...)
+              - pattern: (XStream $X).fromXML($D, ...)
+              - pattern: $XS.fromXML($D, ...)
+              - pattern: new Yaml().load($D)
+              - pattern: (Yaml $Y).load($D)
+              - pattern: (Yaml $Y).loadAs($D, ...)
+              - pattern: $KRYO.readClassAndObject($D, ...)
+              - pattern: SerializationUtils.deserialize($D)
+              - pattern: $HESSIAN.readObject($D)
+          - focus-metavariable: $D
+
+  - id: java-taint-ssti
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input used as template SOURCE (Velocity / FreeMarker / Pebble /
+      Thymeleaf TemplateEngine.process(String)). SSTI -> RCE. Render a fixed
+      template and pass user data as model variables.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: Velocity.evaluate($CTX, $W, $TAG, $T)
+              - pattern: (VelocityEngine $V).evaluate($CTX, $W, $TAG, $T)
+              - pattern: new Template($NAME, new StringReader($T), ...)
+              - pattern: (TemplateEngine $E).process($T, ...)
+              - pattern: (SpringTemplateEngine $E).process($T, ...)
+              - pattern: $PEBBLE.getLiteralTemplate($T)
+          - focus-metavariable: $T
+
+  - id: java-taint-xss
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    message: >
+      User input written to the servlet response / returned from a
+      @ResponseBody String handler without HTML encoding. Reflected XSS.
+      Encode with HtmlUtils.htmlEscape / OWASP Encoder.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: LOW
+      ad-impact: session-theft
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sanitizers:
+      - pattern: HtmlUtils.htmlEscape(...)
+      - pattern: Encode.forHtml(...)
+      - pattern: StringEscapeUtils.escapeHtml4(...)
+      - pattern: ESAPI.encoder().encodeForHTML(...)
+      - pattern: Integer.parseInt(...)
+      - pattern: (int $X)
+      - pattern: (long $X)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RESP.getWriter().write($X)
+              - pattern: $RESP.getWriter().print($X)
+              - pattern: $RESP.getWriter().println($X)
+              - pattern: $RESP.getOutputStream().print($X)
+              - pattern: (PrintWriter $W).print($X)
+              - pattern: (PrintWriter $W).println($X)
+              - pattern: (PrintWriter $W).write($X)
+          - focus-metavariable: $X
+
+  - id: java-taint-open-redirect
+    mode: taint
+    languages: [java]
+    severity: WARNING
+    message: >
+      User input controls a redirect target (sendRedirect / "redirect:" view
+      / RedirectView). Allow only relative paths or allowlisted hosts.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RESP.sendRedirect($U)
+              - pattern: new RedirectView($U, ...)
+              - pattern: new ModelAndView("redirect:" + $U)
+              - pattern: return "redirect:" + $U;
+          - focus-metavariable: $U
+
+  - id: java-taint-ldap-xpath-injection
+    mode: taint
+    languages: [java]
+    severity: ERROR
+    message: >
+      User input concatenated into an LDAP filter or XPath expression.
+      "*)(uid=*))(|(uid=*" or "' or '1'='1" bypasses login / dumps
+      entries. Escape (LdapEncoder.filterEncode) or use variables.
+    metadata:
+      category: security
+      cwe: CWE-90
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO(...) $TYPE $PARAM, ...) { ... }
+              - pattern-inside: |
+                  $RET $METHOD(..., @$ANNO $TYPE $PARAM, ...) { ... }
+          - metavariable-regex:
+              metavariable: $ANNO
+              regex: ^(RequestParam|PathVariable|RequestBody|RequestHeader|CookieValue|ModelAttribute|MatrixVariable|RequestPart|QueryParam|PathParam|FormParam|HeaderParam|CookieParam)$
+          - pattern: $PARAM
+      - pattern: (HttpServletRequest $REQ).getParameter(...)
+      - pattern: (HttpServletRequest $REQ).getParameterValues(...)
+      - pattern: (HttpServletRequest $REQ).getParameterMap()
+      - pattern: (HttpServletRequest $REQ).getHeader(...)
+      - pattern: (HttpServletRequest $REQ).getHeaders(...)
+      - pattern: (HttpServletRequest $REQ).getCookies()
+      - pattern: (HttpServletRequest $REQ).getQueryString()
+      - pattern: (HttpServletRequest $REQ).getPathInfo()
+      - pattern: (HttpServletRequest $REQ).getRequestURI()
+      - pattern: (HttpServletRequest $REQ).getInputStream()
+      - pattern: (HttpServletRequest $REQ).getReader()
+      - pattern: (HttpServletRequest $REQ).getPart(...)
+    pattern-sanitizers:
+      - pattern: LdapEncoder.filterEncode(...)
+      - pattern: LdapNameBuilder.newInstance(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: (DirContext $C).search($BASE, $F, ...)
+              - pattern: (InitialDirContext $C).search($BASE, $F, ...)
+              - pattern: (LdapTemplate $L).search($BASE, $F, ...)
+              - pattern: (XPath $XP).evaluate($F, ...)
+              - pattern: (XPath $XP).compile($F)
+          - focus-metavariable: $F

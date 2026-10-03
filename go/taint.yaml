@@ -1,0 +1,580 @@
+# =====================================================================
+# Go - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources: net/http, gorilla/mux, chi, gin, echo, fiber. Request objects
+# are matched by TYPE (e.g. ($C : *gin.Context)) so that db.Query(...)
+# is not mistaken for c.Query(...).
+# =====================================================================
+rules:
+  - id: go-taint-sqli
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL string (database/sql, sqlx, GORM Raw/Where/
+      Order). Use placeholders: db.Query("... WHERE id = $1", id).
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
+      - pattern: uuid.Parse(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.Query($Q, ...)
+              - pattern: $DB.QueryRow($Q, ...)
+              - pattern: $DB.Exec($Q, ...)
+              - pattern: $DB.Prepare($Q)
+              - pattern: $DB.QueryContext($CTX, $Q, ...)
+              - pattern: $DB.QueryRowContext($CTX, $Q, ...)
+              - pattern: $DB.ExecContext($CTX, $Q, ...)
+              - pattern: $DB.PrepareContext($CTX, $Q)
+              - pattern: $DB.Select($DST, $Q, ...)
+              - pattern: $DB.Get($DST, $Q, ...)
+              - pattern: $DB.Queryx($Q, ...)
+              - pattern: $DB.Raw($Q, ...)
+              - pattern: $DB.Where($Q, ...)
+              - pattern: $DB.Order($Q)
+              - pattern: $DB.Group($Q)
+              - pattern: $DB.Having($Q, ...)
+          - pattern-not: '($C : *gin.Context).Query(...)'
+          - pattern-not: '($C : *fiber.Ctx).Query(...)'
+          - pattern-not: '($C : *gin.Context).Get(...)'
+          - focus-metavariable: $Q
+
+  - id: go-taint-command-injection
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    message: >
+      User input reaches os/exec. With "sh -c" it is full command injection;
+      as program name it is RCE; as argument it can still be argument
+      injection (--output=/flag). Use fixed binaries and validate args.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      - pattern: strconv.Atoi(...)
+      - pattern: strconv.ParseInt(...)
+      - pattern: strconv.ParseUint(...)
+      - pattern: strconv.ParseFloat(...)
+      - pattern: strconv.ParseBool(...)
+      - pattern: uuid.Parse(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: exec.Command($SH, "-c", $X, ...)
+              - pattern: exec.CommandContext($CTX, $SH, "-c", $X, ...)
+              - pattern: exec.Command($X, ...)
+              - pattern: exec.CommandContext($CTX, $X, ...)
+              - pattern: syscall.Exec($X, ...)
+          - focus-metavariable: $X
+
+  - id: go-taint-path-traversal
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    message: >
+      User input reaches a filesystem path. filepath.Join and filepath.Clean
+      do NOT stop "../" on relative input. Use filepath.Base, or
+      filepath.Clean("/"+p) then join, and verify the prefix.
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      - pattern: filepath.Base(...)
+      - pattern: path.Base(...)
+      - pattern: filepath.Clean("/" + $X)
+      - pattern: path.Clean("/" + $X)
+      - pattern: strconv.Atoi(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: os.Open($P)
+              - pattern: os.OpenFile($P, ...)
+              - pattern: os.ReadFile($P)
+              - pattern: ioutil.ReadFile($P)
+              - pattern: os.Create($P)
+              - pattern: os.WriteFile($P, ...)
+              - pattern: ioutil.WriteFile($P, ...)
+              - pattern: os.Remove($P)
+              - pattern: os.RemoveAll($P)
+              - pattern: os.ReadDir($P)
+              - pattern: os.Mkdir($P, ...)
+              - pattern: os.MkdirAll($P, ...)
+              - pattern: os.Rename($P, ...)
+              - pattern: http.ServeFile($W, $R, $P)
+              - pattern: '($C : *gin.Context).File($P)'
+              - pattern: '($C : *gin.Context).FileAttachment($P, ...)'
+              - pattern: '($C : *gin.Context).SaveUploadedFile($F, $P)'
+              - pattern: '($C : echo.Context).File($P)'
+              - pattern: '($C : echo.Context).Attachment($P, ...)'
+              - pattern: '($C : *fiber.Ctx).SendFile($P, ...)'
+              - pattern: '($C : *fiber.Ctx).SaveFile($F, $P)'
+          - focus-metavariable: $P
+
+  - id: go-taint-ssrf
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    message: >
+      User input controls the URL of an outgoing HTTP request. Allowlist the
+      host, and block loopback/private ranges in a custom Dialer.Control.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: http.Get($U)
+              - pattern: http.Head($U)
+              - pattern: http.Post($U, ...)
+              - pattern: http.PostForm($U, ...)
+              - pattern: http.NewRequest($M, $U, ...)
+              - pattern: http.NewRequestWithContext($CTX, $M, $U, ...)
+              - pattern: '($CL : *http.Client).Get($U)'
+              - pattern: '($CL : *http.Client).Post($U, ...)'
+              - pattern: net.Dial($N, $U)
+          - focus-metavariable: $U
+
+  - id: go-taint-xss
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    message: >
+      User input written to the HTTP response without HTML escaping
+      (fmt.Fprintf/Write/template.HTML). Reflected XSS against the checker
+      bot. Use html/template with normal string values.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: LOW
+      ad-impact: session-theft
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sanitizers:
+      - pattern: html.EscapeString(...)
+      - pattern: template.HTMLEscapeString(...)
+      - pattern: url.QueryEscape(...)
+      - pattern: strconv.Atoi(...)
+      # file contents are not attacker-controlled HTML just because the path was
+      - pattern: os.ReadFile(...)
+      - pattern: ioutil.ReadFile(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: template.HTML($X)
+              - pattern: template.JS($X)
+              - pattern: template.URL($X)
+              - pattern: 'fmt.Fprintf(($W : http.ResponseWriter), $X, ...)'
+              - pattern: 'fmt.Fprintf(($W : http.ResponseWriter), $FMT, ..., $X, ...)'
+              - pattern: 'fmt.Fprint(($W : http.ResponseWriter), ..., $X, ...)'
+              - pattern: 'io.WriteString(($W : http.ResponseWriter), $X)'
+              - pattern: '($W : http.ResponseWriter).Write($X)'
+              - pattern: '($C : *gin.Context).Data($CODE, $CT, $X)'
+              - pattern: '($C : echo.Context).HTML($CODE, $X)'
+          - focus-metavariable: $X
+
+  - id: go-taint-ssti
+    mode: taint
+    languages: [go]
+    severity: ERROR
+    message: >
+      User input parsed as a Go template. The attacker can call any exported
+      method of the data passed to Execute ({{.User.Password}}, {{.DB...}})
+      and with text/template inject raw HTML. Parse fixed templates only.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $TPL.Parse($T)
+              - pattern: template.Must($TPL.Parse($T))
+          - focus-metavariable: $T
+
+  - id: go-taint-open-redirect
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    message: >
+      User input controls a redirect target. Allow only relative paths
+      (beginning with "/" but not "//" or "/\") or allowlisted hosts.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: http.Redirect($W, $R, $U, $CODE)
+              - pattern: '($C : *gin.Context).Redirect($CODE, $U)'
+              - pattern: '($C : echo.Context).Redirect($CODE, $U)'
+              - pattern: '($C : *fiber.Ctx).Redirect($U, ...)'
+          - focus-metavariable: $U
+
+  - id: go-taint-nosqli
+    mode: taint
+    languages: [go]
+    severity: WARNING
+    message: >
+      Request-decoded data used as a MongoDB filter. If it is a map/
+      interface{} the client can send {"password": {"$ne": ""}}. Decode into
+      typed structs with string fields and build the bson.M yourself.
+    metadata:
+      category: security
+      cwe: CWE-943
+      confidence: LOW
+      ad-impact: auth-bypass
+    pattern-sources:
+      - pattern: '($R : *http.Request).URL.Query()'
+      - pattern: '($R : *http.Request).URL.RawQuery'
+      - pattern: '($R : *http.Request).URL.Path'
+      - pattern: '($R : *http.Request).FormValue(...)'
+      - pattern: '($R : *http.Request).PostFormValue(...)'
+      - pattern: '($R : *http.Request).Form'
+      - pattern: '($R : *http.Request).PostForm'
+      - pattern: '($R : *http.Request).Body'
+      - pattern: '($R : *http.Request).Header'
+      - pattern: '($R : *http.Request).Cookie(...)'
+      - pattern: '($R : *http.Request).PathValue(...)'
+      - pattern: mux.Vars(...)
+      - pattern: chi.URLParam(...)
+      - pattern: '($C : *gin.Context).Query(...)'
+      - pattern: '($C : *gin.Context).DefaultQuery(...)'
+      - pattern: '($C : *gin.Context).Param(...)'
+      - pattern: '($C : *gin.Context).PostForm(...)'
+      - pattern: '($C : *gin.Context).DefaultPostForm(...)'
+      - pattern: '($C : *gin.Context).GetHeader(...)'
+      - pattern: '($C : *gin.Context).Cookie(...)'
+      - pattern: '($C : *gin.Context).GetRawData()'
+      - pattern: '($C : echo.Context).QueryParam(...)'
+      - pattern: '($C : echo.Context).Param(...)'
+      - pattern: '($C : echo.Context).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Query(...)'
+      - pattern: '($C : *fiber.Ctx).Params(...)'
+      - pattern: '($C : *fiber.Ctx).FormValue(...)'
+      - pattern: '($C : *fiber.Ctx).Body()'
+      # structs filled from the request body
+      - by-side-effect: true
+        patterns:
+          - pattern-either:
+              - pattern: json.NewDecoder($BODY).Decode(&$X)
+              - pattern: '($C : *gin.Context).ShouldBindJSON(&$X)'
+              - pattern: '($C : *gin.Context).BindJSON(&$X)'
+              - pattern: '($C : *gin.Context).ShouldBind(&$X)'
+              - pattern: '($C : *gin.Context).Bind(&$X)'
+              - pattern: '($C : echo.Context).Bind(&$X)'
+              - pattern: '($C : *fiber.Ctx).BodyParser(&$X)'
+          - focus-metavariable: $X
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $COL.Find($CTX, $F, ...)
+              - pattern: $COL.FindOne($CTX, $F, ...)
+              - pattern: $COL.UpdateOne($CTX, $F, ...)
+              - pattern: $COL.DeleteOne($CTX, $F, ...)
+              - pattern: $COL.DeleteMany($CTX, $F, ...)
+              - pattern: $COL.CountDocuments($CTX, $F, ...)
+          - focus-metavariable: $F

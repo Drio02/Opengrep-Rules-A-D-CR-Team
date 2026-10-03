@@ -1,0 +1,584 @@
+# =====================================================================
+# JavaScript / TypeScript (Node.js) - taint mode (dataflow) rules
+# ---------------------------------------------------------------------
+# Sources: Express / Koa / Fastify / Next.js request objects.
+# The syntactic rules in backend.yaml / javascript.yaml only see
+# `db.query(`...${req.query.id}`)` in one expression. These rules follow
+# the value through variables, destructuring, string building and
+# helper functions (use --taint-intrafile for cross-function flows).
+# =====================================================================
+rules:
+  - id: js-taint-sqli
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches a raw SQL query. Use placeholders:
+      db.query("SELECT ... WHERE id = ?", [id]).
+    metadata:
+      category: security
+      cwe: CWE-89
+      confidence: HIGH
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sanitizers:
+      - pattern: parseInt(...)
+      - pattern: parseFloat(...)
+      - pattern: Number(...)
+      - pattern: Boolean(...)
+      - pattern: $DB.escape(...)
+      - pattern: mysql.escape(...)
+      - pattern: validator.isInt(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $DB.query($Q, ...)
+              - pattern: $DB.execute($Q, ...)
+              - pattern: $DB.raw($Q, ...)
+              - pattern: $DB.whereRaw($Q, ...)
+              - pattern: $DB.all($Q, ...)
+              - pattern: $DB.get($Q, ...)
+              - pattern: $DB.run($Q, ...)
+              - pattern: $DB.exec($Q, ...)
+              - pattern: $DB.prepare($Q, ...)
+              - pattern: $DB.$queryRawUnsafe($Q, ...)
+              - pattern: $DB.$executeRawUnsafe($Q, ...)
+              - pattern: sequelize.query($Q, ...)
+          # only receivers that look like a DB handle (avoids axios.get, cp.exec, ...)
+          - metavariable-regex:
+              metavariable: $DB
+              regex: (?i)^(.*(db|database|conn|connection|pool|client|sql|knex|sequelize|prisma|stmt|statement|cursor|pg|mysql|sqlite|trx|tx|repo|manager|orm).*)$
+          - focus-metavariable: $Q
+
+  - id: js-taint-nosqli
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User-controlled value used inside a MongoDB/Mongoose filter. Express
+      parses ?password[$ne]=x and JSON bodies into objects, so
+      {password: req.body.password} becomes {password: {$ne: "x"}}.
+      Cast with String() or use mongo-sanitize / express-mongo-sanitize.
+    metadata:
+      category: security
+      cwe: CWE-943
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies)$
+    pattern-sanitizers:
+      - pattern: String(...)
+      - pattern: Number(...)
+      - pattern: parseInt(...)
+      - pattern: sanitize(...)
+      - pattern: mongoSanitize.sanitize(...)
+      - pattern: new ObjectId(...)
+      - pattern: ObjectId(...)
+      - pattern: $X.toString()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $M.find($Q, ...)
+              - pattern: $M.findOne($Q, ...)
+              - pattern: $M.findOneAndUpdate($Q, ...)
+              - pattern: $M.findOneAndDelete($Q, ...)
+              - pattern: $M.updateOne($Q, ...)
+              - pattern: $M.updateMany($Q, ...)
+              - pattern: $M.deleteOne($Q, ...)
+              - pattern: $M.deleteMany($Q, ...)
+              - pattern: $M.countDocuments($Q, ...)
+              - pattern: $M.where($Q, ...)
+              - pattern: $M.aggregate($Q, ...)
+          - focus-metavariable: $Q
+
+  - id: js-taint-command-injection
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches a shell command (child_process.exec / execSync /
+      spawn with shell). Use execFile/spawn with an argument array and no
+      shell.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sanitizers:
+      - pattern: parseInt(...)
+      - pattern: Number(...)
+      - pattern: shellescape(...)
+      - pattern: shellQuote.quote(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: child_process.exec($C, ...)
+              - pattern: child_process.execSync($C, ...)
+              - pattern: exec($C, ...)
+              - pattern: execSync($C, ...)
+              - pattern: $CP.exec($C, ...)
+              - pattern: $CP.execSync($C, ...)
+              - pattern: 'spawn($C, $ARGS, {..., shell: true, ...})'
+              - pattern: 'spawnSync($C, $ARGS, {..., shell: true, ...})'
+              - pattern: '$CP.spawn($C, $ARGS, {..., shell: true, ...})'
+          - pattern-not: $RE.exec($C)
+          - focus-metavariable: $C
+
+  - id: js-taint-code-injection
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches eval / Function / vm / setTimeout(string). vm is NOT
+      a sandbox: this.constructor.constructor("return process")() escapes.
+    metadata:
+      category: security
+      cwe: CWE-95
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: eval($X)
+              - pattern: Function(..., $X)
+              - pattern: new Function(..., $X)
+              - pattern: vm.runInNewContext($X, ...)
+              - pattern: vm.runInThisContext($X, ...)
+              - pattern: vm.runInContext($X, ...)
+              - pattern: vm.compileFunction($X, ...)
+              - pattern: new vm.Script($X, ...)
+              - pattern: setTimeout($X, ...)
+              - pattern: setInterval($X, ...)
+              - pattern: $SAFEEVAL.run($X, ...)
+          - focus-metavariable: $X
+
+  - id: js-taint-path-traversal
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches a filesystem path / res.sendFile. path.join does not
+      stop "../". Resolve with path.resolve(base, name) and check
+      startsWith(base + path.sep), or use path.basename().
+    metadata:
+      category: security
+      cwe: CWE-22
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sanitizers:
+      - pattern: path.basename(...)
+      - pattern: sanitizeFilename(...)
+      - pattern: sanitize(...)
+      - pattern: parseInt(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fs.$FN($P, ...)
+              - pattern: fsp.$FN($P, ...)
+              - pattern: fs.promises.$FN($P, ...)
+              - pattern: $FN($P, ...)
+          - metavariable-regex:
+              metavariable: $FN
+              regex: ^(readFile|readFileSync|writeFile|writeFileSync|appendFile|appendFileSync|createReadStream|createWriteStream|unlink|unlinkSync|rm|rmSync|readdir|readdirSync|open|openSync|stat|statSync|access|existsSync|copyFile|rename|mkdir)$
+          - focus-metavariable: $P
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.sendFile($P, ...)
+              - pattern: $RES.download($P, ...)
+              - pattern: require($P)
+              - pattern: import($P)
+          - focus-metavariable: $P
+
+  - id: js-taint-ssrf
+    mode: taint
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      User input controls the URL of a server-side request (fetch/axios/got/
+      http.get). Reach internal containers, admin APIs, Redis, metadata.
+      Allowlist the host and block private/loopback ranges after DNS.
+    metadata:
+      category: security
+      cwe: CWE-918
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: fetch($U, ...)
+              - pattern: axios($U, ...)
+              - pattern: axios.$M($U, ...)
+              - pattern: got($U, ...)
+              - pattern: got.$M($U, ...)
+              - pattern: http.get($U, ...)
+              - pattern: https.get($U, ...)
+              - pattern: http.request($U, ...)
+              - pattern: https.request($U, ...)
+              - pattern: needle.$M($U, ...)
+              - pattern: superagent.$M($U, ...)
+              - pattern: request($U, ...)
+              - pattern: 'axios({..., url: $U, ...})'
+          - focus-metavariable: $U
+
+  - id: js-taint-ssti
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input used as TEMPLATE SOURCE (ejs.render / pug.compile /
+      Handlebars.compile / nunjucks.renderString / _.template). SSTI -> RCE.
+      Render a fixed template and pass user data as locals.
+    metadata:
+      category: security
+      cwe: CWE-1336
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: ejs.render($T, ...)
+              - pattern: ejs.compile($T, ...)
+              - pattern: pug.render($T, ...)
+              - pattern: pug.compile($T, ...)
+              - pattern: jade.compile($T, ...)
+              - pattern: Handlebars.compile($T, ...)
+              - pattern: handlebars.compile($T, ...)
+              - pattern: nunjucks.renderString($T, ...)
+              - pattern: $ENV.renderString($T, ...)
+              - pattern: _.template($T, ...)
+              - pattern: lodash.template($T, ...)
+              - pattern: doT.template($T, ...)
+              - pattern: Mustache.render($T, ...)
+          - focus-metavariable: $T
+
+  - id: js-taint-prototype-pollution
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches a deep merge / path setter. {"__proto__":
+      {"isAdmin": true}} pollutes every object (auth bypass, and RCE via
+      ejs/pug/child_process gadgets). Block __proto__/constructor/prototype
+      keys or use Object.create(null)/Map.
+    metadata:
+      category: security
+      cwe: CWE-1321
+      confidence: MEDIUM
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: _.merge($DST, ..., $SRC, ...)
+              - pattern: _.mergeWith($DST, ..., $SRC, ...)
+              - pattern: _.defaultsDeep($DST, ..., $SRC, ...)
+              - pattern: lodash.merge($DST, ..., $SRC, ...)
+              - pattern: merge($DST, ..., $SRC, ...)
+              - pattern: deepmerge($DST, $SRC, ...)
+              - pattern: $.extend(true, $DST, ..., $SRC, ...)
+              - pattern: jQuery.extend(true, $DST, ..., $SRC, ...)
+          - focus-metavariable: $SRC
+      - patterns:
+          - pattern-either:
+              - pattern: _.set($OBJ, $SRC, ...)
+              - pattern: _.setWith($OBJ, $SRC, ...)
+              - pattern: dot.set($OBJ, $SRC, ...)
+              - pattern: dotProp.set($OBJ, $SRC, ...)
+              - pattern: objectPath.set($OBJ, $SRC, ...)
+          - focus-metavariable: $SRC
+      # obj[key1][key2] = value with attacker-controlled key1
+      - patterns:
+          - pattern: $OBJ[$SRC][$K2] = $V
+          - focus-metavariable: $SRC
+
+  - id: js-taint-deserialization
+    mode: taint
+    languages: [javascript, typescript]
+    severity: ERROR
+    message: >
+      User input reaches a deserializer that can execute code
+      (node-serialize / serialize-javascript eval / funcster / js-yaml with
+      unsafe schema). Use JSON.parse.
+    metadata:
+      category: security
+      cwe: CWE-502
+      confidence: HIGH
+      ad-impact: rce
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: serialize.unserialize($D, ...)
+              - pattern: unserialize($D, ...)
+              - pattern: funcster.deepDeserialize($D, ...)
+              - pattern: cryo.parse($D, ...)
+              - pattern: 'yaml.load($D, {..., schema: yaml.DEFAULT_FULL_SCHEMA, ...})'
+              - pattern: yaml.loadAll($D, ...)
+          - focus-metavariable: $D
+
+  - id: js-taint-open-redirect
+    mode: taint
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      User input controls a redirect target. Only allow relative paths
+      (starts with "/" but not "//" or "/\") or an allowlisted host.
+    metadata:
+      category: security
+      cwe: CWE-601
+      confidence: MEDIUM
+      ad-impact: phishing
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.redirect($U)
+              - pattern: $RES.redirect($CODE, $U)
+              - pattern: $RES.location($U)
+              - pattern: ctx.redirect($U)
+          - focus-metavariable: $U
+
+  - id: js-taint-xss-response
+    mode: taint
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      User input written into the HTTP response body as a string. If the
+      Content-Type is text/html this is reflected XSS (cookie theft of the
+      checker/bot). Escape it or render through a template engine.
+    metadata:
+      category: security
+      cwe: CWE-79
+      confidence: LOW
+      ad-impact: session-theft
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sanitizers:
+      - pattern: escapeHtml(...)
+      - pattern: escape(...)
+      - pattern: he.encode(...)
+      - pattern: DOMPurify.sanitize(...)
+      - pattern: xss(...)
+      - pattern: encodeURIComponent(...)
+      - pattern: JSON.stringify(...)
+      - pattern: parseInt(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: $RES.send($X)
+              - pattern: $RES.write($X)
+              - pattern: $RES.end($X)
+          - pattern-not: $RES.send({...})
+          - focus-metavariable: $X
+
+  - id: js-taint-regex-injection
+    mode: taint
+    languages: [javascript, typescript]
+    severity: WARNING
+    message: >
+      User input compiled as a RegExp. ReDoS freezes the single Node event
+      loop (whole service down = SLA loss) and ".*" acts as a search oracle.
+      Escape special characters first.
+    metadata:
+      category: security
+      cwe: CWE-1333
+      confidence: MEDIUM
+      ad-impact: dos
+    pattern-sources:
+      - patterns:
+          - pattern-either:
+              - pattern: req.$FIELD
+              - pattern: request.$FIELD
+              - pattern: ctx.request.$FIELD
+              - pattern: ctx.$FIELD
+          - metavariable-regex:
+              metavariable: $FIELD
+              regex: ^(query|body|params|cookies|signedCookies|headers|files|file|hostname|path|url|originalUrl)$
+      - pattern: req.get(...)
+      - pattern: req.header(...)
+      - pattern: req.param(...)
+      - pattern: await request.json()
+      - pattern: await request.text()
+      - pattern: await request.formData()
+      - pattern: new URL(request.url).searchParams
+    pattern-sanitizers:
+      - pattern: escapeRegExp(...)
+      - pattern: _.escapeRegExp(...)
+      - pattern: escapeStringRegexp(...)
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern: new RegExp($R, ...)
+              - pattern: RegExp($R, ...)
+          - focus-metavariable: $R

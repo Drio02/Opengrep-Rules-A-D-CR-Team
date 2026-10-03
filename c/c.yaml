@@ -1,0 +1,443 @@
+# =====================================================================
+# C / C++ - memory corruption and A&D logic bugs (syntactic)
+# ---------------------------------------------------------------------
+# A&D events regularly ship native services (C/C++ TCP daemons, CGI
+# binaries). These rules find the classic planted bugs: overflows,
+# format strings, off-by-one, UAF / double free, predictable tokens and
+# broken password checks.
+# =====================================================================
+rules:
+  # -------------------------------------------------------------------
+  # Unbounded copies
+  # -------------------------------------------------------------------
+  - id: c-gets
+    languages: [c, cpp]
+    severity: ERROR
+    message: gets() has no bounds at all. Stack overflow -> RCE. Use fgets(buf, sizeof buf, stdin).
+    metadata:
+      category: security
+      cwe: CWE-242
+      confidence: HIGH
+      ad-impact: rce
+    pattern: gets(...)
+
+  - id: c-unbounded-string-copy
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      strcpy/strcat/sprintf/vsprintf write without a length limit. If the
+      source can be longer than the destination -> buffer overflow. Use
+      snprintf / strlcpy / strncat with sizeof(dst).
+    metadata:
+      category: security
+      cwe: CWE-120
+      confidence: MEDIUM
+      ad-impact: rce
+    pattern-either:
+      - pattern: strcpy($D, $S)
+      - pattern: strcat($D, $S)
+      - pattern: sprintf($D, ...)
+      - pattern: vsprintf($D, ...)
+      - pattern: wcscpy($D, $S)
+      - pattern: wcscat($D, $S)
+      - pattern: stpcpy($D, $S)
+
+  - id: c-scanf-unbounded-string
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      scanf-family %s / %[ without a field width reads an unlimited number
+      of bytes into the buffer -> overflow. Use "%63s" (sizeof - 1).
+    metadata:
+      category: security
+      cwe: CWE-120
+      confidence: HIGH
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern: scanf($FMT, ...)
+          - pattern: fscanf($F, $FMT, ...)
+          - pattern: sscanf($S, $FMT, ...)
+      - metavariable-regex:
+          metavariable: $FMT
+          regex: ^".*%(s|\[).*"$
+
+  - id: c-read-larger-than-buffer
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      Reads/copies more bytes than the declared buffer size
+      ($SIZE > $N). Direct stack/heap overflow.
+    metadata:
+      category: security
+      cwe: CWE-121
+      confidence: HIGH
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              char $BUF[$N];
+              ...
+          - pattern-inside: |
+              unsigned char $BUF[$N];
+              ...
+          - pattern-inside: |
+              uint8_t $BUF[$N];
+              ...
+      - pattern-either:
+          - pattern: read($FD, $BUF, $SIZE)
+          - pattern: recv($FD, $BUF, $SIZE, $FL)
+          - pattern: fgets($BUF, $SIZE, $F)
+          - pattern: fread($BUF, 1, $SIZE, $F)
+          - pattern: memcpy($BUF, $SRC, $SIZE)
+          - pattern: strncpy($BUF, $SRC, $SIZE)
+          - pattern: memset($BUF, $V, $SIZE)
+          - pattern: snprintf($BUF, $SIZE, ...)
+      - metavariable-comparison:
+          comparison: int($SIZE) > int($N)
+
+  - id: c-off-by-one-null-terminator
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      Writes at buf[sizeof(buf)] / buf[N] - one past the end. Classic
+      off-by-one (overwrites saved RBP / next heap chunk size).
+    metadata:
+      category: security
+      cwe: CWE-193
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - pattern: $B[sizeof($B)] = $X
+      - pattern: |
+          char $B[$N];
+          ...
+          $B[$N] = $X;
+      - pattern: |
+          $L = read($FD, $B, sizeof($B));
+          ...
+          $B[$L] = $X;
+      - pattern: strncat($D, $S, sizeof($D))
+
+  - id: c-strncpy-no-terminator
+    languages: [c, cpp]
+    severity: INFO
+    message: >
+      strncpy(dst, src, sizeof dst) does not NUL-terminate when src is long
+      enough. Later strlen/printf read past the buffer (info leak of
+      adjacent memory, e.g. secrets/flags).
+    metadata:
+      category: security
+      cwe: CWE-170
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    patterns:
+      - pattern: strncpy($D, $S, sizeof($D))
+      - pattern-not-inside: |
+          strncpy($D, $S, sizeof($D));
+          ...
+          $D[sizeof($D) - 1] = $Z;
+
+  # -------------------------------------------------------------------
+  # Format strings
+  # -------------------------------------------------------------------
+  - id: c-format-string
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      printf-family call with a non-literal format string. %p/%s leak
+      memory (stack canary, libc, flags in memory), %n writes -> RCE.
+      Use printf("%s", buf).
+    metadata:
+      category: security
+      cwe: CWE-134
+      confidence: HIGH
+      ad-impact: rce
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: printf($FMT)
+              - pattern: printf($FMT, ...)
+              - pattern: vprintf($FMT, ...)
+              - pattern: wprintf($FMT, ...)
+          - pattern-not: printf("...", ...)
+          - pattern-not: vprintf("...", ...)
+          - pattern-not: wprintf("...", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: fprintf($F, $FMT, ...)
+              - pattern: dprintf($F, $FMT, ...)
+              - pattern: vfprintf($F, $FMT, ...)
+              - pattern: syslog($P, $FMT, ...)
+          - pattern-not: fprintf($F, "...", ...)
+          - pattern-not: dprintf($F, "...", ...)
+          - pattern-not: vfprintf($F, "...", ...)
+          - pattern-not: syslog($P, "...", ...)
+      - patterns:
+          - pattern-either:
+              - pattern: sprintf($D, $FMT, ...)
+              - pattern: snprintf($D, $N, $FMT, ...)
+              - pattern: vsnprintf($D, $N, $FMT, ...)
+          - pattern-not: sprintf($D, "...", ...)
+          - pattern-not: snprintf($D, $N, "...", ...)
+          - pattern-not: vsnprintf($D, $N, "...", ...)
+
+  # -------------------------------------------------------------------
+  # Heap lifetime
+  # -------------------------------------------------------------------
+  - id: c-double-free
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      The same pointer is freed twice without being reassigned. Double free
+      -> heap corruption -> RCE (tcache poisoning).
+    metadata:
+      category: security
+      cwe: CWE-415
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern: |
+          free($P);
+          ...
+          free($P);
+      - pattern-not: |
+          free($P);
+          ...
+          $P = $X;
+          ...
+          free($P);
+
+  - id: c-use-after-free
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      Pointer used after free() without being reassigned. Use-after-free ->
+      read another user's reallocated note/session, or RCE. Set the pointer
+      to NULL after free.
+    metadata:
+      category: security
+      cwe: CWE-416
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern-inside: |
+          free($P);
+          ...
+      - pattern-either:
+          - pattern: $P->$F
+          - pattern: $P[$I]
+          - pattern: $FN(..., $P, ...)
+      - pattern-not: free($P)
+      # pointer was reset / reassigned after the free
+      - pattern-not-inside: |
+          free($P);
+          ...
+          $P = $X;
+          ...
+
+  - id: c-malloc-multiplication-overflow
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      malloc(a * b) / malloc(n + k) with attacker-influenced sizes can wrap
+      around and allocate a tiny buffer that is then overflowed. Use
+      calloc(n, size) or check for overflow first.
+    metadata:
+      category: security
+      cwe: CWE-190
+      confidence: LOW
+      ad-impact: rce
+    pattern-either:
+      - pattern: malloc($A * $B)
+      - pattern: realloc($P, $A * $B)
+      - pattern: alloca($N)
+
+  # -------------------------------------------------------------------
+  # Process execution / files
+  # -------------------------------------------------------------------
+  - id: c-command-execution-dynamic
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      system()/popen() with a non-literal command. If any part comes from
+      the client (snprintf'd username, filename...) -> command injection.
+      Use execve with an argv array.
+    metadata:
+      category: security
+      cwe: CWE-78
+      confidence: MEDIUM
+      ad-impact: rce
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: system($C)
+              - pattern: popen($C, $M)
+          - pattern-not: system("...")
+          - pattern-not: popen("...", $M)
+      - pattern: execl("/bin/sh", $A, "-c", $C, ...)
+      - pattern: execlp("sh", $A, "-c", $C, ...)
+
+  - id: c-insecure-temp-file
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      tmpnam/tempnam/mktemp return a predictable name without creating the
+      file: symlink race. Use mkstemp().
+    metadata:
+      category: security
+      cwe: CWE-377
+      confidence: HIGH
+      ad-impact: integrity
+    pattern-either:
+      - pattern: tmpnam(...)
+      - pattern: tempnam(...)
+      - pattern: mktemp(...)
+
+  - id: c-toctou-access-open
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      access()/stat() check followed by open()/fopen() on the same path.
+      Race: swap the file for a symlink to the flag between check and use.
+    metadata:
+      category: security
+      cwe: CWE-367
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    pattern-either:
+      - pattern: |
+          access($P, ...);
+          ...
+          open($P, ...);
+      - pattern: |
+          access($P, ...);
+          ...
+          fopen($P, ...);
+      - pattern: |
+          if (access($P, ...) == 0) { ... open($P, ...); ... }
+      - pattern: |
+          if (access($P, ...) == 0) { ... fopen($P, ...); ... }
+      - pattern: |
+          stat($P, $ST);
+          ...
+          fopen($P, ...);
+
+  - id: c-world-writable-permissions
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      World-writable file/dir permissions or umask(0). Other processes (or
+      other services on the vulnbox) can tamper with data/flag stores.
+    metadata:
+      category: security
+      cwe: CWE-732
+      confidence: HIGH
+      ad-impact: integrity
+    pattern-either:
+      - pattern: chmod($P, 0777)
+      - pattern: chmod($P, 0666)
+      - pattern: mkdir($P, 0777)
+      - pattern: open($P, $F, 0777)
+      - pattern: open($P, $F, 0666)
+      - pattern: umask(0)
+
+  # -------------------------------------------------------------------
+  # A&D logic
+  # -------------------------------------------------------------------
+  - id: c-weak-rand-token
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      rand()/random() seeded with time() (or not seeded). Anyone can replay
+      srand(time(NULL)) for the last few seconds and regenerate session
+      tokens, note IDs or passwords. Read from /dev/urandom or getrandom().
+    metadata:
+      category: security
+      cwe: CWE-338
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: srand(time(...))
+      - pattern: srand(<... time(...) ...>)
+      - pattern: srand(getpid())
+      - pattern: srand($LIT)
+      - pattern: srandom(time(...))
+      - pattern: rand()
+      - pattern: random()
+
+  - id: c-strncmp-attacker-length
+    languages: [c, cpp]
+    severity: ERROR
+    message: >
+      strncmp/memcmp length taken from strlen() of one operand. If that
+      operand is attacker input, an EMPTY password (or a prefix) matches.
+      Compare full lengths first, then use a constant-time compare.
+    metadata:
+      category: security
+      cwe: CWE-187
+      confidence: HIGH
+      ad-impact: auth-bypass
+    pattern-either:
+      - pattern: strncmp($A, $B, strlen($A))
+      - pattern: strncmp($A, $B, strlen($B))
+      - pattern: memcmp($A, $B, strlen($A))
+      - pattern: memcmp($A, $B, strlen($B))
+      - pattern: strncasecmp($A, $B, strlen($A))
+      - pattern: strncasecmp($A, $B, strlen($B))
+
+  - id: c-timing-unsafe-secret-compare
+    languages: [c, cpp]
+    severity: INFO
+    message: >
+      Secret/password/token compared with strcmp/memcmp (early exit, timing
+      oracle). Use a constant-time compare (CRYPTO_memcmp, sodium_memcmp).
+    metadata:
+      category: security
+      cwe: CWE-208
+      confidence: LOW
+      ad-impact: auth-bypass
+    patterns:
+      - pattern-either:
+          - pattern: strcmp($A, $B)
+          - pattern: memcmp($A, $B, $N)
+      - metavariable-regex:
+          metavariable: $A
+          regex: (?i).*(pass|secret|token|key|hmac|sig|auth).*
+
+  - id: c-signed-length-check
+    languages: [c, cpp]
+    severity: WARNING
+    message: >
+      Signed length compared against an upper bound only, then used as a
+      size. A negative length passes "if (len > MAX)" and becomes a huge
+      size_t in memcpy/read. Use size_t or also check len < 0.
+    metadata:
+      category: security
+      cwe: CWE-195
+      confidence: MEDIUM
+      ad-impact: rce
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              int $LEN = $INIT;
+              ...
+          - pattern-inside: |
+              int $LEN;
+              ...
+      - pattern-either:
+          - pattern: |
+              if ($LEN > $MAX) { ... }
+              ...
+              memcpy($D, $S, $LEN);
+          - pattern: |
+              if ($LEN > $MAX) { ... }
+              ...
+              read($FD, $B, $LEN);
+          - pattern: |
+              if ($LEN >= $MAX) { ... }
+              ...
+              memcpy($D, $S, $LEN);
+      - pattern-not: |
+          if ($LEN < 0 || $LEN > $MAX) { ... }
+          ...
