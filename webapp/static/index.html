@@ -12,8 +12,27 @@
     <h1>A&amp;D Findings Dashboard</h1>
     <div class="sub" id="last-run">No analysis yet</div>
   </div>
-  <div class="job-pill" id="job-pill" hidden></div>
+  <div class="row">
+    <div class="job-pill" id="job-pill" hidden></div>
+    <span class="sub" id="whoami"></span>
+    <button type="button" id="btn-change-pw">Change password</button>
+    <button type="button" id="btn-logout">Log out</button>
+  </div>
 </header>
+<div id="default-pw" class="warnbox banner" hidden>
+  The login still uses the <b>default password</b>, which is public. Change it (button above) before the game.
+</div>
+<section id="pw-panel" class="panel pw-panel" hidden>
+  <form id="pw-form" class="row" autocomplete="off">
+    <span class="lbl">Change password</span>
+    <input type="password" id="pw-current" placeholder="Current password" autocomplete="current-password" required>
+    <input type="password" id="pw-new1" placeholder="New password" autocomplete="new-password" required>
+    <input type="password" id="pw-new2" placeholder="Repeat new password" autocomplete="new-password" required>
+    <button type="submit" class="primary">Save</button>
+    <button type="button" id="pw-cancel">Cancel</button>
+  </form>
+  <div class="sub">Other browsers logged in with this user are logged out.</div>
+</section>
 
 <main>
   <section class="panel">

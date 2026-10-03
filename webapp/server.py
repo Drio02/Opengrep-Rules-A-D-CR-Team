@@ -7,20 +7,24 @@ finding: label (patch in progress / patched in prod / false positive) and
 patcher assignee.
 
     python3 webapp/server.py [--root ~/vulnbox/services] [--port 8765]
-                             [--host 127.0.0.1] [--data DIR] [--token T]
+                             [--host 127.0.0.1] [--data DIR]
+    python3 webapp/server.py --set-password      # change the login password
 
 Only the Python standard library is used. State (settings, patchers,
 labels) and scan output live in --data (default
 ~/.local/share/opengrep-dashboard), never inside the services.
 
-Binding to anything other than localhost requires a token: one is
-generated and printed when --token is not given. The game network is
-hostile, so do not expose the dashboard without it.
+Every page and API call requires a login (default user "patcher").
+The default password is public (this repository is public): when the
+dashboard is reachable from the network it must be changed at the first
+login. The game network is hostile.
 """
 import argparse
 import concurrent.futures
 import datetime
+import getpass
 import hashlib
+import hmac
 import http.server
 import ipaddress
 import json
@@ -32,6 +36,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 import traceback
 import urllib.parse
 
@@ -54,6 +59,15 @@ SKIP_DIRS = {"opengrep-out", "opengrep-reports", "node_modules"}
 MAX_BODY = 64 * 1024
 KEEP_RUNS = 3
 
+DEFAULT_USER = "patcher"
+DEFAULT_PASSWORD = "patcherspatching!"   # public: change it (--set-password or the UI)
+PBKDF2_ITERS = 240000
+MIN_PASSWORD = 10
+SESSION_TTL = 12 * 3600                 # seconds, renewed on every request
+SESSION_COOKIE = "ogdash_session"
+LOGIN_MAX_FAILURES = 100                # failed logins per IP and window
+LOGIN_WINDOW = 300                      # seconds
+
 DEFAULT_SETTINGS = {
     "root": "",
     "branch": "main",
@@ -67,6 +81,75 @@ DEFAULT_SETTINGS = {
 
 def now():
     return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def hash_password(password, salt=None, iters=PBKDF2_ITERS):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), iters).hex()
+    return {"salt": salt, "iters": iters, "hash": digest}
+
+
+def check_password(password, rec):
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(rec["salt"]), rec["iters"]).hex()
+    return hmac.compare_digest(digest, rec["hash"])
+
+
+class Auth:
+    """Login sessions (in memory: a restart logs everybody out) and a
+    per-IP limit on failed logins."""
+
+    def __init__(self, store):
+        self.store = store
+        self.lock = threading.Lock()
+        self.sessions = {}      # sha256(token) -> {"user", "expires"}
+        self.failures = {}      # ip -> [timestamps]
+
+    def blocked(self, ip):
+        with self.lock:
+            cutoff = time.time() - LOGIN_WINDOW
+            recent = [t for t in self.failures.get(ip, []) if t > cutoff]
+            self.failures[ip] = recent
+            return len(recent) >= LOGIN_MAX_FAILURES
+
+    def login(self, ip, user, password):
+        rec = self.store.state["accounts"].get(user)
+        # always run PBKDF2, so a wrong user name takes as long as a wrong password
+        ok = check_password(password, rec or self.store.state["accounts"][DEFAULT_USER]) and rec is not None
+        if not ok:
+            with self.lock:
+                self.failures.setdefault(ip, []).append(time.time())
+            return None
+        token = secrets.token_urlsafe(32)
+        with self.lock:
+            self.failures.pop(ip, None)
+            self.sessions[hashlib.sha256(token.encode()).hexdigest()] = {
+                "user": user, "expires": time.time() + SESSION_TTL}
+        return token
+
+    def user(self, token):
+        if not token:
+            return None
+        key = hashlib.sha256(token.encode()).hexdigest()
+        with self.lock:
+            sess = self.sessions.get(key)
+            if not sess or sess["expires"] < time.time():
+                self.sessions.pop(key, None)
+                return None
+            sess["expires"] = time.time() + SESSION_TTL
+            return sess["user"]
+
+    def logout(self, token):
+        with self.lock:
+            self.sessions.pop(hashlib.sha256((token or "").encode()).hexdigest(), None)
+
+    def drop_user_sessions(self, user, keep=None):
+        keep_key = hashlib.sha256(keep.encode()).hexdigest() if keep else None
+        with self.lock:
+            for k in [k for k, v in self.sessions.items() if v["user"] == user and k != keep_key]:
+                del self.sessions[k]
+
+    def is_default(self, user):
+        return bool(self.store.state["accounts"].get(user, {}).get("default"))
 
 
 def run(cmd, cwd=None, env=None, timeout=120):
@@ -382,16 +465,21 @@ class Store:
         self.dir = data_dir
         self.lock = threading.RLock()
         os.makedirs(os.path.join(data_dir, "runs"), exist_ok=True)
+        os.chmod(data_dir, 0o700)
         self.state_file = os.path.join(data_dir, "state.json")
         self.scan_file = os.path.join(data_dir, "last_scan.json")
         self.state = {"settings": dict(DEFAULT_SETTINGS), "patchers": list(DEFAULT_PATCHERS),
-                      "labels": {}, "version": 0}
+                      "labels": {}, "version": 0, "accounts": {}}
         loaded = self._read(self.state_file)
         if loaded:
             self.state["settings"].update(loaded.get("settings", {}))
             self.state["patchers"] = loaded.get("patchers") or list(DEFAULT_PATCHERS)
             self.state["labels"] = loaded.get("labels", {})
             self.state["version"] = loaded.get("version", 0)
+            self.state["accounts"] = loaded.get("accounts", {})
+        if DEFAULT_USER not in self.state["accounts"]:
+            self.state["accounts"][DEFAULT_USER] = dict(hash_password(DEFAULT_PASSWORD), default=True)
+            self._write(self.state_file, self.state)
         self.scan = self._read(self.scan_file) or {}
 
     @staticmethod
@@ -404,7 +492,8 @@ class Store:
 
     def _write(self, path, data):
         tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)  # holds password hashes
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False)
         os.replace(tmp, path)
 
@@ -570,7 +659,10 @@ class Jobs:
 # ---------------------------------------------------------------------------
 # HTTP
 # ---------------------------------------------------------------------------
-STATIC = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css"}
+STATIC = {"/app.js": "app.js", "/style.css": "style.css", "/login.js": "login.js"}
+PUBLIC_API = {"/api/login", "/api/logout", "/api/me"}
+# allowed while the default password must still be changed
+CHANGE_PW_API = PUBLIC_API | {"/api/password"}
 CTYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
           ".css": "text/css; charset=utf-8"}
 
@@ -579,10 +671,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "opengrep-dashboard"
     store = None
     jobs = None
-    token = ""
+    auth = None
+    exposed = False   # reachable from the network (not bound to localhost)
 
     def log_message(self, fmt, *args):  # quieter console: only errors
-        if args and str(args[1]).startswith(("4", "5")) and str(args[1]) != "401":
+        if args and str(args[1]).startswith(("4", "5")) and str(args[1]) not in ("401", "403"):
             sys.stderr.write("%s %s\n" % (self.address_string(), fmt % args))
 
     # -- helpers -------------------------------------------------------------
@@ -597,18 +690,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Content-Security-Policy",
-                         "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:")
+                         "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; "
+                         "frame-ancestors 'none'; form-action 'self'")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
         for k, v in (extra or {}).items():
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(body)
 
-    def authorized(self):
-        if not self.token:
-            return True
-        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
-        given = self.headers.get("X-Token", "") or (q.get("token") or [""])[0]
-        return secrets.compare_digest(given, self.token)
+    def session_token(self):
+        for part in self.headers.get("Cookie", "").split(";"):
+            k, _, v = part.strip().partition("=")
+            if k == SESSION_COOKIE:
+                return v
+        return ""
+
+    def current_user(self):
+        return self.auth.user(self.session_token())
+
+    def must_change_password(self, user):
+        return self.exposed and self.auth.is_default(user)
+
+    def gate(self, path):
+        """None when the request may go on, else (code, body)."""
+        if path in PUBLIC_API:
+            return None
+        user = self.current_user()
+        if not user:
+            return 401, {"error": "login required"}
+        if path not in CHANGE_PW_API and self.must_change_password(user):
+            return 403, {"error": "change the default password first", "mustChange": True}
+        return None
+
+    def cookie(self, token, max_age):
+        return {"Set-Cookie": f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}"}
 
     def body(self):
         n = int(self.headers.get("Content-Length") or 0)
@@ -623,15 +739,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/favicon.ico":
             return self.send(204, b"", "image/x-icon")
+        if path in ("/", "/index.html", "/login"):
+            page = "index.html" if self.current_user() else "login.html"
+            with open(os.path.join(HERE, "static", page), "rb") as fh:
+                return self.send(200, fh.read(), CTYPES[".html"])
         if path in STATIC:
             fname = os.path.join(HERE, "static", STATIC[path])
             with open(fname, "rb") as fh:
                 return self.send(200, fh.read(), CTYPES[os.path.splitext(fname)[1]])
         if not path.startswith("/api/"):
             return self.send(404, {"error": "not found"})
-        if not self.authorized():
-            return self.send(401, {"error": "token required"})
+        denied = self.gate(path)
+        if denied:
+            return self.send(*denied)
         st = self.store
+        if path == "/api/me":
+            user = self.current_user()
+            return self.send(200, {"user": user, "defaultPassword": bool(user) and self.auth.is_default(user),
+                                   "mustChange": bool(user) and self.must_change_password(user),
+                                   "minPassword": MIN_PASSWORD})
         if path == "/api/state":
             with st.lock:
                 scan = st.scan or {}
@@ -665,10 +791,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
-        if not self.authorized():
-            return self.send(401, {"error": "token required"})
+        denied = self.gate(path)
+        if denied:
+            return self.send(*denied)
         try:
             data = self.body()
+            if path == "/api/login":
+                return self.login(data)
+            if path == "/api/logout":
+                self.auth.logout(self.session_token())
+                return self.send(200, {"ok": True}, extra=self.cookie("", 0))
             return self.send(200, self.post(path, data))
         except LookupError as e:
             return self.send(404, {"error": str(e)})
@@ -677,8 +809,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except RuntimeError as e:
             return self.send(409, {"error": str(e)})
 
+    def login(self, data):
+        ip = self.client_address[0]
+        if self.auth.blocked(ip):
+            return self.send(429, {"error": f"too many failed logins from {ip}, wait a few minutes"})
+        user, password = str(data.get("user", "")).strip(), str(data.get("password", ""))
+        token = self.auth.login(ip, user, password)
+        if not token:
+            print(f"[!] failed login for {user[:40]!r} from {ip}", file=sys.stderr, flush=True)
+            return self.send(401, {"error": "wrong user or password"})
+        return self.send(200, {"user": user, "mustChange": self.must_change_password(user)},
+                         extra=self.cookie(token, SESSION_TTL))
+
     def post(self, path, data):
         st = self.store
+        if path == "/api/password":
+            user = self.current_user()
+            current, new = str(data.get("current", "")), str(data.get("new", ""))
+            rec = st.state["accounts"][user]
+            if not check_password(current, rec):
+                raise ValueError("current password is wrong")
+            if len(new) < MIN_PASSWORD:
+                raise ValueError(f"the new password needs at least {MIN_PASSWORD} characters")
+            if new == DEFAULT_PASSWORD or check_password(new, rec):
+                raise ValueError("choose a password different from the current / default one")
+            with st.lock:
+                st.state["accounts"][user] = hash_password(new)
+                st.save()
+            self.auth.drop_user_sessions(user, keep=self.session_token())  # log out other browsers
+            return {"ok": True}
         if path == "/api/settings":
             new = dict(st.state["settings"])
             if "root" in data:
@@ -804,10 +963,20 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="default 127.0.0.1 (localhost only)")
     ap.add_argument("--data", default=os.path.expanduser("~/.local/share/opengrep-dashboard"),
                     help="state + scan output directory")
-    ap.add_argument("--token", default="", help="access token (generated when --host is not local)")
+    ap.add_argument("--set-password", action="store_true",
+                    help=f"set the password of the '{DEFAULT_USER}' login (asked on the terminal) and exit")
     args = ap.parse_args()
 
     store = Store(os.path.abspath(os.path.expanduser(args.data)))
+    if args.set_password:
+        pw = getpass.getpass(f"New password for '{DEFAULT_USER}': ")
+        if len(pw) < MIN_PASSWORD or pw == DEFAULT_PASSWORD:
+            sys.exit(f"[!] use at least {MIN_PASSWORD} characters, different from the default one")
+        if getpass.getpass("Repeat it: ") != pw:
+            sys.exit("[!] the passwords do not match")
+        store.state["accounts"][DEFAULT_USER] = hash_password(pw)
+        store.save()
+        sys.exit(f"[*] password of '{DEFAULT_USER}' changed (restart the dashboard to log everybody out)")
     if args.root:
         root = os.path.abspath(os.path.expanduser(args.root))
         if not os.path.isdir(root):
@@ -820,11 +989,9 @@ def main():
         sys.exit(f"[!] port {args.port} is reserved or used by a service "
                  f"({', '.join(map(str, sorted(used)))}); pick another with --port")
 
-    token = args.token
-    if not token and not is_loopback(args.host):
-        token = secrets.token_urlsafe(18)
     access = GitAccess(store)
-    Handler.store, Handler.jobs, Handler.token = store, Jobs(store, access), token
+    Handler.store, Handler.jobs, Handler.auth = store, Jobs(store, access), Auth(store)
+    Handler.exposed = not is_loopback(args.host)
 
     # explicit --port: that one or nothing. Default: 8765, else the next free
     # port that no service declares (another competition may use 8765)
@@ -856,7 +1023,11 @@ def main():
             pass
     print(f"[*] data     : {store.dir}")
     print(f"[*] services : {store.state['settings']['root'] or '(set it in the UI)'}")
-    print(f"[*] dashboard: http://{shown}:{args.port}/" + (f"#token={token}" if token else ""), flush=True)
+    print(f"[*] dashboard: http://{shown}:{args.port}/  (login: {DEFAULT_USER})", flush=True)
+    if store.state["accounts"][DEFAULT_USER].get("default"):
+        print("[!] the login still uses the DEFAULT password, which is public: change it in the UI or with "
+              "--set-password" + (" (required at the first login: the dashboard is reachable from the network)"
+                                   if Handler.exposed else ""), flush=True)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

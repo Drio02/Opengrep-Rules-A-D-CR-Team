@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Login - A&amp;D Findings Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body class="login-page">
+<main class="login-box panel">
+  <h1>A&amp;D Findings Dashboard</h1>
+  <p class="sub">Team access only.</p>
+
+  <form id="login-form" autocomplete="on">
+    <label>User <input type="text" id="user" name="username" autocomplete="username" required autofocus></label>
+    <label>Password <input type="password" id="password" name="password" autocomplete="current-password" required></label>
+    <button type="submit" class="primary">Log in</button>
+  </form>
+
+  <form id="change-form" hidden autocomplete="off">
+    <p class="warnbox">The default password is public. Choose a new one for the team before continuing.</p>
+    <label>New password <input type="password" id="new1" autocomplete="new-password" required></label>
+    <label>Repeat it <input type="password" id="new2" autocomplete="new-password" required></label>
+    <button type="submit" class="primary">Change password</button>
+  </form>
+
+  <div id="msg" class="msg error" hidden></div>
+</main>
+<script src="/login.js"></script>
+</body>
+</html>

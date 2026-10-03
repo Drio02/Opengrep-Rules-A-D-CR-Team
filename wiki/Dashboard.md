@@ -12,8 +12,12 @@ Linux laptop or WSL.
 
 ```bash
 python3 webapp/server.py --root ~/demo-ad
-# [*] dashboard: http://localhost:8765/
+# [*] dashboard: http://localhost:8765/  (login: patcher)
 ```
+
+Log in with user **`patcher`**, password **`patcherspatching!`**, then change
+the password (*Change password* at the top right). This repository is public,
+so every team can read the default password.
 
 | Option | Default | |
 |---|---|---|
@@ -21,7 +25,7 @@ python3 webapp/server.py --root ~/demo-ad
 | `--port` | `8765`, else next free | Never `3001` nor a port declared by the services. Without `--port`, if `8765` is taken or used by a service, the next free port is picked and printed. An explicit `--port` that collides is refused |
 | `--host` | `127.0.0.1` | Use `0.0.0.0` to share with the team (see below) |
 | `--data` | `~/.local/share/opengrep-dashboard` | Settings, labels and scan output. Never written inside the services |
-| `--token` | generated | Access token, required when `--host` is not localhost |
+| `--set-password` | | Set the `patcher` password on the terminal and exit (also the way to recover a forgotten password) |
 
 From WSL, `http://localhost:8765/` also opens in the Windows browser.
 
@@ -43,17 +47,40 @@ nginx `listen`, `--port` flags.
   language with a rule pack (Python, JS/TS, PHP, Go, Java, Ruby, Rust, C/C++,
   C#), names with spaces, and binary-only services (flagged "reverse it").
 
+### Login
+
+Every page and API call needs a login, also on localhost:
+
+- one shared team account, `patcher` (default password `patcherspatching!`);
+- the password is stored only as a PBKDF2-SHA256 hash in `<data>/state.json`
+  (mode `600`, data directory `700`);
+- sessions are an `HttpOnly`, `SameSite=Strict` cookie valid for 12 h
+  (renewed while used); restarting the server logs everybody out;
+- after **100 failed logins from one IP within 5 minutes** that IP is blocked
+  for the rest of the window (even with the right password); failed logins are
+  printed on the server console;
+- changing the password logs out every other browser using the account;
+- while the default password is in use, the dashboard shows a warning, and
+  when it is **reachable from the network** (`--host` other than localhost)
+  the password must be changed at the first login before anything else is
+  shown.
+
+Forgot the password: stop the server, run
+`python3 webapp/server.py --set-password` (same `--data` if you use one), and
+start it again.
+
 ### Sharing with the team
 
 ```bash
-python3 webapp/server.py --root ~/vulnbox/services --host 0.0.0.0
-# [*] dashboard: http://10.13.37.5:8765/#token=8v4kDH9y...
+python3 webapp/server.py --root ~/vulnbox/services --host 10.13.37.5
+# [*] dashboard: http://10.13.37.5:8765/  (login: patcher)
 ```
 
-Send that URL (with the token) to the team over a private channel. The token is
-kept in the browser after the first visit. The game network is hostile: never
-bind to `0.0.0.0` without the token, and prefer the team VPN / LAN interface
-(`--host 10.13.37.5`) over all interfaces.
+Bind to the team VPN / LAN address rather than `0.0.0.0`, change the default
+password first (or at the first login, which is then required), and share the
+password over a private team channel. The game network is hostile and the
+traffic is plain HTTP: do not expose the dashboard on the game network
+interface.
 
 ## Use
 
@@ -137,6 +164,6 @@ Re-run the analysis:
 |---|---|
 | `webapp/server.py` | HTTP server, JSON API, background jobs (scan / pull) |
 | `webapp/static/` | UI (`index.html`, `app.js`, `style.css`), no external assets |
-| `<data>/state.json` | settings, patchers, labels |
+| `<data>/state.json` | settings, patchers, labels, login password hash (mode `600`) |
 | `<data>/last_scan.json` | last analysis (findings with code context, resolved list) |
 | `<data>/runs/<timestamp>/<service>/` | raw scan output of the last 3 runs (`results.json`, `scan.log`, ...) |

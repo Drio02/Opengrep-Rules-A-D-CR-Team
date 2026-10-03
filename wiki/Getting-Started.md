@@ -86,7 +86,10 @@ Do this before the game starts, on the laptop that will run the dashboard
 
    It listens on `http://localhost:8765/` (or the next free port that no
    service uses; it never takes `3001` or a port declared by the services).
-   On WSL the URL also opens in the Windows browser.
+   On WSL the URL also opens in the Windows browser. Log in as `patcher` /
+   `patcherspatching!` and **change the password** right away (*Change
+   password*, or `python3 webapp/server.py --set-password` before starting):
+   the default one is public.
 6. In the dashboard, open *Settings*: set *SSH key for git* (`~/.ssh/vulnbox`),
    the branch to pull (default `main`; the remote's default branch is used
    when it does not exist), *Skip docker-compose files* (on by default). The
@@ -94,8 +97,9 @@ Do this before the game starts, on the laptop that will run the dashboard
    starts; if not, it tells you what to fix.
 7. Click **Run analysis** once to warm up and check every service shows
    findings (a "binary-only" service has to be reversed by hand).
-8. To share with the team: restart with `--host <your VPN/LAN IP>` and send the
-   printed URL with its `#token=...` privately.
+8. To share with the team: restart with `--host <your VPN/LAN IP>` and share
+   the URL and the new password over a private team channel. Never expose it
+   on the game network interface.
 
 Details: [Findings Dashboard](Dashboard.md).
 

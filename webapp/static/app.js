@@ -1,14 +1,6 @@
 (function () {
   "use strict";
 
-  // ---- token (only needed when the server is not bound to localhost) ----
-  var TOKEN = "";
-  try {
-    var m = location.hash.match(/token=([\w-]+)/);
-    if (m) { localStorage.setItem("dash-token", m[1]); history.replaceState(null, "", location.pathname); }
-    TOKEN = localStorage.getItem("dash-token") || "";
-  } catch (e) { /* storage blocked: no token */ }
-
   var S = { state: null, services: [], resolved: [], labels: {}, version: -1, all: [] };
   var $ = function (id) { return document.getElementById(id); };
 
@@ -19,15 +11,12 @@
   }
 
   function api(method, path, body) {
-    var opts = { method: method, headers: {} };
-    if (TOKEN) opts.headers["X-Token"] = TOKEN;
+    var opts = { method: method, headers: {}, credentials: "same-origin" };
     if (body !== undefined) { opts.headers["Content-Type"] = "application/json"; opts.body = JSON.stringify(body); }
     return fetch(path, opts).then(function (r) {
       return r.json().catch(function () { return {}; }).then(function (data) {
-        if (r.status === 401) {
-          var t = prompt("Access token (printed by the server at start):");
-          if (t) { TOKEN = t.trim(); try { localStorage.setItem("dash-token", TOKEN); } catch (e) {} return api(method, path, body); }
-        }
+        // session expired / logged out elsewhere / default password must be changed
+        if (r.status === 401 || (r.status === 403 && data.mustChange)) { location.replace("/"); }
         if (!r.ok) throw new Error(data.error || ("HTTP " + r.status));
         return data;
       });
@@ -80,7 +69,7 @@
         (sc.skip_compose ? " - docker-compose skipped" : "") + " - min severity " + sc.severity
       : "No analysis yet - set the services directory and click Run analysis";
     $("btn-report").hidden = !sc.finished;
-    $("btn-report").href = "/api/report.html" + (TOKEN ? "?token=" + encodeURIComponent(TOKEN) : "");
+    $("btn-report").href = "/api/report.html";
   }
 
   $("root-form").addEventListener("submit", function (ev) {
@@ -108,6 +97,31 @@
   $("btn-scan").addEventListener("click", function () { startJob("/api/scan", "Analysis"); });
   $("btn-pull").addEventListener("click", function () { startJob("/api/pull", "Pull"); });
   $("btn-pull-scan").addEventListener("click", function () { startJob("/api/pull-scan", "Pull + analysis"); });
+
+  // ---- session: user, logout, password -------------------------------------------
+  function loadMe() {
+    return api("GET", "/api/me").then(function (me) {
+      if (!me.user) { location.replace("/"); return; }
+      $("whoami").textContent = "Logged in as " + me.user;
+      $("default-pw").hidden = !me.defaultPassword;
+      S.minPassword = me.minPassword;
+    }).catch(function () {});
+  }
+  $("btn-logout").addEventListener("click", function () {
+    api("POST", "/api/logout", {}).then(function () { location.replace("/"); }, function () { location.replace("/"); });
+  });
+  $("btn-change-pw").addEventListener("click", function () {
+    $("pw-panel").hidden = !$("pw-panel").hidden;
+    if (!$("pw-panel").hidden) $("pw-current").focus();
+  });
+  $("pw-cancel").addEventListener("click", function () { $("pw-form").reset(); $("pw-panel").hidden = true; });
+  $("pw-form").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if ($("pw-new1").value !== $("pw-new2").value) { flash("The new passwords do not match", true); return; }
+    api("POST", "/api/password", { current: $("pw-current").value, "new": $("pw-new1").value }).then(function () {
+      $("pw-form").reset(); $("pw-panel").hidden = true; flash("Password changed"); loadMe();
+    }).catch(function (e) { flash(e.message, true); });
+  });
 
   // ---- git access (detected at start, before any pull) -----------------------------
   var accessOpenedSettings = false;
@@ -458,6 +472,7 @@
     }).catch(function () {});
   }, 4000);
 
+  loadMe();
   loadAll().then(function () {
     if (S.state && S.state.job && S.state.job.state === "running") pollJob();
   });
