@@ -16,11 +16,13 @@
 #   REPORT_DIR where the HTML report goes (default: ./opengrep-reports)
 #   NO_REPORT  set to 1 to skip the HTML report (scan-bulk.sh does this
 #              and writes one combined report instead)
+#   EXCLUDE    extra space-separated globs to skip, e.g.
+#              EXCLUDE="docker-compose*.yml compose*.yaml"
 # ---------------------------------------------------------------------
 set -euo pipefail
 
 if [[ $# -lt 1 || "$1" == "-h" || "$1" == "--help" ]]; then
-  sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'
   exit 1
 fi
 
@@ -80,6 +82,11 @@ esac
 JOB_ARGS=()
 [[ -n "${JOBS:-}" ]] && JOB_ARGS=(--jobs "$JOBS")
 
+# read -a splits on spaces without expanding the globs against the cwd
+EXCLUDE_ARGS=()
+read -r -a EXCLUDE_GLOBS <<< "${EXCLUDE:-}"
+for glob in "${EXCLUDE_GLOBS[@]}"; do EXCLUDE_ARGS+=(--exclude "$glob"); done
+
 # native binaries are invisible to opengrep (pwn services often ship only
 # the ELF), so say it loudly instead of printing "0 findings"
 find_binaries() {
@@ -117,6 +124,7 @@ rm -f "$OUT_DIR/results.json" "$OUT_DIR/results.sarif" "$OUT_DIR/results.txt" "$
   "${CONFIG_ARGS[@]}" \
   "${SEV_ARGS[@]}" \
   "${JOB_ARGS[@]}" \
+  "${EXCLUDE_ARGS[@]}" \
   --taint-intrafile \
   --x-ignore-semgrepignore-files \
   --no-git-ignore \

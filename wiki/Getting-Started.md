@@ -59,6 +59,8 @@ scripts/scan.sh <service-dir> [pack ...]
   - `REPORT_DIR=/path` changes where the HTML report goes
     (default `./opengrep-reports`); `NO_REPORT=1` skips it.
   - `JOBS=8` sets the number of parallel jobs.
+  - `EXCLUDE="docker-compose*.yml compose*.yaml"` skips extra files (the
+    [dashboard](Dashboard.md) does this by default).
 
 ```bash
 SEVERITY=WARNING scripts/scan.sh ~/vulnbox/services/shop python infra

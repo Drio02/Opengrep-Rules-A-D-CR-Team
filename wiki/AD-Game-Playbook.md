@@ -31,6 +31,12 @@ minutes, **where to read first**.
    file, opens offline). Mark findings as confirmed / false positive /
    patched in it as you go.
 
+   Or, better for the whole team, run the
+   [Findings Dashboard](Dashboard.md) on one laptop: it runs the analysis,
+   pulls the latest service code, and everyone labels findings
+   (*patch in progress* / *patched in prod*) and assigns patchers in the
+   same place.
+
 ## T+5 - Infra quick wins (no code reading needed)
 
 Look at the `compose-*`, `dockerfile-*` and `nginx-*` findings first. They are

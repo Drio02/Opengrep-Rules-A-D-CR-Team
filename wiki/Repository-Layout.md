@@ -14,6 +14,7 @@
 ├── infra/            docker-compose, Dockerfile, nginx   (new)
 ├── tests/<pack>/     annotated fixtures for the rule files (new)
 ├── scripts/          scan / triage / test / catalog helpers (new)
+├── webapp/           findings dashboard: server.py + static UI (new)
 └── wiki/             this documentation (new)
 ```
 

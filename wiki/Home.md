@@ -21,6 +21,7 @@ and also something to try against the other teams.
 | Page | What it covers |
 |---|---|
 | [Getting Started](Getting-Started.md) | Install Opengrep, run the first scan, read the output |
+| [Findings Dashboard](Dashboard.md) | Web app: analyze all services, pull their latest code, label and assign findings |
 | [A&D Game Playbook](AD-Game-Playbook.md) | How to use the rules during the game, minute by minute |
 | [Repository Layout](Repository-Layout.md) | Folders, rule file types, metadata, naming |
 | [Scenarios Covered](Scenarios-Covered.md) | Vulnerability classes x languages coverage matrix |

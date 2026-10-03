@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>A&amp;D Findings Dashboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>A&amp;D Findings Dashboard</h1>
+    <div class="sub" id="last-run">No analysis yet</div>
+  </div>
+  <div class="job-pill" id="job-pill" hidden></div>
+</header>
+
+<main>
+  <section class="panel">
+    <form id="root-form" class="row">
+      <label for="root" class="lbl">Services directory</label>
+      <input type="text" id="root" placeholder="/home/user/vulnbox/services" spellcheck="false" autocomplete="off">
+      <button type="submit">Save</button>
+    </form>
+    <div class="sub" id="root-info"></div>
+    <div class="row actions">
+      <button id="btn-scan" class="primary">Run analysis</button>
+      <button id="btn-pull">Pull latest</button>
+      <button id="btn-pull-scan">Pull latest + re-run</button>
+      <a id="btn-report" class="button" href="#" download>Download HTML report</a>
+    </div>
+    <details id="settings">
+      <summary>Settings</summary>
+      <form id="settings-form" class="grid">
+        <label>Branch to pull <input type="text" id="branch" spellcheck="false"></label>
+        <label>SSH key for git (optional) <input type="text" id="ssh_key" spellcheck="false" placeholder="~/.ssh/vulnbox"></label>
+        <label>opengrep binary (optional) <input type="text" id="opengrep" spellcheck="false" placeholder="auto"></label>
+        <label>Minimum severity
+          <select id="severity"><option>INFO</option><option>WARNING</option><option>ERROR</option></select>
+        </label>
+        <label>Services in parallel <input type="number" id="parallel" min="1" max="16"></label>
+        <label class="check"><input type="checkbox" id="skip_compose"> Skip docker-compose files</label>
+        <div><button type="submit">Save settings</button></div>
+      </form>
+      <p class="sub">Pull fast-forwards each service repo to <code>origin/&lt;branch&gt;</code>. When the
+        remote has no such branch (vulnbox repos often use <code>master</code>) its default branch is used.
+        A service checked out on another branch, or with local commits, is left untouched.</p>
+    </details>
+    <div id="msg" class="msg" hidden></div>
+  </section>
+
+  <section class="panel" id="job-panel" hidden>
+    <h2 id="job-title"></h2>
+    <table class="steps"><thead><tr><th>Service</th><th>Pull</th><th>Analysis</th></tr></thead><tbody id="job-steps"></tbody></table>
+    <details><summary>Log</summary><pre id="job-log"></pre></details>
+  </section>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <table id="svc-table" class="data">
+      <thead><tr><th>Service</th><th>Git</th><th class="num">Findings</th><th class="num">Error</th>
+        <th class="num">Warn</th><th class="num">Info</th><th class="num">Open</th>
+        <th class="num">In progress</th><th class="num">Patched</th><th class="num">FP</th><th>Notes</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <div class="row">
+      <span class="lbl">Patchers</span>
+      <span id="patchers"></span>
+      <form id="patcher-form" class="inline">
+        <input type="text" id="patcher-name" placeholder="Add patcher" maxlength="40">
+        <button type="submit">Add</button>
+      </form>
+    </div>
+  </section>
+
+  <div class="toolbar">
+    <input type="search" id="q" placeholder="Search rule, file, message, code...">
+    <label class="chip"><input type="checkbox" class="sev" value="ERROR" checked>Error</label>
+    <label class="chip"><input type="checkbox" class="sev" value="WARNING" checked>Warning</label>
+    <label class="chip"><input type="checkbox" class="sev" value="INFO" checked>Info</label>
+    <select id="f-svc"><option value="">All services</option></select>
+    <select id="f-imp"><option value="">All impacts</option></select>
+    <select id="f-status">
+      <option value="">Any label</option>
+      <option value="open">Open (no label)</option>
+      <option value="in_progress">Patch in progress</option>
+      <option value="patched">Patched in prod</option>
+      <option value="false_positive">False positive</option>
+      <option value="todo">Not patched / not FP</option>
+    </select>
+    <select id="f-assignee"><option value="">Any assignee</option><option value="-">Unassigned</option></select>
+    <label class="chip"><input type="checkbox" id="f-new">New only</label>
+    <select id="group"><option value="service">Group by service</option>
+      <option value="rule">Group by rule</option><option value="impact">Group by impact</option>
+      <option value="assignee">Group by assignee</option></select>
+    <span class="count" id="count"></span>
+  </div>
+
+  <div id="list"></div>
+  <div id="resolved"></div>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>
