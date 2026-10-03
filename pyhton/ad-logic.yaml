@@ -56,15 +56,21 @@ rules:
       cwe: CWE-338
       confidence: MEDIUM
       ad-impact: auth-bypass
-    pattern-either:
-      - pattern: random.choice(...)
-      - pattern: random.choices(...)
-      - pattern: random.randint(...)
-      - pattern: random.randrange(...)
-      - pattern: random.getrandbits(...)
-      - pattern: random.random()
-      - pattern: random.sample(...)
-      - pattern: random.randbytes(...)
+    patterns:
+      - pattern-either:
+          - pattern: random.choice(...)
+          - pattern: random.choices(...)
+          - pattern: random.randint(...)
+          - pattern: random.randrange(...)
+          - pattern: random.getrandbits(...)
+          - pattern: random.random()
+          - pattern: random.sample(...)
+          - pattern: random.randbytes(...)
+      # cosmetic randomness: "if random.randint(0, 5) == 0:", picking a quote
+      - pattern-not-inside: random.$FN(...) == $X
+      - pattern-not-inside: random.$FN(...) < $X
+      - pattern-not-inside: random.$FN(...) > $X
+      - pattern-not-regex: (?i)random\.choice\(\s*[\w.]*(quote|message|msg|greeting|joke|motd|banner|fact|tip|emoji|colou?r)s?\s*\)
 
   - id: py-random-seed-predictable
     languages: [python]
@@ -172,9 +178,10 @@ rules:
     languages: [python]
     severity: WARNING
     message: >
-      Route with a sensitive path (admin/flag/export/debug/...) and no auth
-      decorator. Verify it checks the session inside the handler; if not,
-      this is a free flag endpoint.
+      Route with a sensitive path (admin/flag/backdoor/profile/export/...)
+      and no auth decorator or dependency. Verify it checks the session
+      inside the handler; if not, this is a free flag endpoint. Patch: add
+      the auth dependency / decorator, or delete the route.
     metadata:
       category: security
       cwe: CWE-306
@@ -195,7 +202,7 @@ rules:
           regex: ^(route|get|post|put|patch|delete)$
       - metavariable-regex:
           metavariable: $PATH
-          regex: (?i).*(admin|flag|secret|internal|debug|export|backup|dump|all|delete|config|users).*
+          regex: (?i).*(admin|flag|secret|internal|debug|export|backup|dump|all|delete|config|users?|backdoor|hidden|private|profile|account).*
       - pattern-not: |
           @$APP.$ROUTE($PATH, ...)
           @$DECO
@@ -219,6 +226,10 @@ rules:
       - pattern-not: |
           @$APP.$ROUTE($PATH, ..., dependencies=$D, ...)
           async def $F(...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ..., dependencies=$D, ...)
+          def $F(...):
               ...
       # handler checks the session / identity itself
       - pattern-not: |
@@ -247,6 +258,105 @@ rules:
           @$APP.$ROUTE($PATH, ...)
           async def $F(..., $U = Depends(...), ...):
               ...
+      # FastAPI typed dependencies: user_id: str = Depends(get_current_user)
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(..., $U: $T = Depends(...), ...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          async def $F(..., $U: $T = Depends(...), ...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          def $F(..., $U: $T = Security(...), ...):
+              ...
+      - pattern-not: |
+          @$APP.$ROUTE($PATH, ...)
+          async def $F(..., $U: $T = Security(...), ...):
+              ...
+
+  - id: py-idor-session-presence-only
+    languages: [python]
+    severity: WARNING
+    message: >
+      The handler takes the target user/object from the request (path or
+      query) and only checks that *some* session exists ("x" in session)
+      before showing private data. Any logged-in attacker reads every other
+      user's data. Patch: compare the requested owner with session[...]
+      (or drop the parameter and use the session identity).
+    metadata:
+      category: security
+      cwe: CWE-639
+      confidence: MEDIUM
+      ad-impact: flag-leak
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              $U = $REQ.match_info[$K]
+              ...
+          - pattern-inside: |
+              $U = $REQ.match_info.get(...)
+              ...
+          - pattern-inside: |
+              $U = request.args[$K]
+              ...
+          - pattern-inside: |
+              $U = request.args.get(...)
+              ...
+          - pattern-inside: |
+              $U = request.view_args[$K]
+              ...
+          # username = request.match_info["username"] wrapped in try/except
+          - pattern-inside: |
+              try:
+                  ...
+                  $U = $REQ.match_info[$K]
+                  ...
+              except:
+                  ...
+              ...
+          - pattern-inside: |
+              try:
+                  ...
+                  $U = $REQ.match_info[$K]
+                  ...
+              except $E:
+                  ...
+              ...
+      - pattern: |
+          if $KEY in $SESSION:
+              ...
+      - metavariable-regex:
+          metavariable: $SESSION
+          regex: (?i).*session.*
+      # the gated block reads the session identity itself (per-session data)
+      - pattern-not: |
+          if $KEY in $SESSION:
+              ...
+              <... $SESSION[$SK] ...>
+              ...
+      # the requested owner is compared with the logged-in identity
+      - pattern-not-inside: |
+          $U = $X
+          ...
+          <... $U == $SESSION[$SK] ...>
+          ...
+      - pattern-not-inside: |
+          $U = $X
+          ...
+          <... $U != $SESSION[$SK] ...>
+          ...
+      - pattern-not-inside: |
+          $U = $X
+          ...
+          <... $SESSION[$SK] == $U ...>
+          ...
+      - pattern-not-inside: |
+          $U = $X
+          ...
+          <... $SESSION[$SK] != $U ...>
+          ...
 
   - id: py-django-debug-or-wildcard-hosts
     languages: [python]

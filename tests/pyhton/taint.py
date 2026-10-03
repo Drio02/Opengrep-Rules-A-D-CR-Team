@@ -134,3 +134,58 @@ def search():
     # ok: py-taint-regex-injection
     hits = [n for n in NOTES if re.search(re.escape(pattern), n)]
     return str(hits)
+
+
+async def handle_login(request):
+    session = await get_session(request)
+    params = await request.post()
+    challenge = int(params["challenge"])
+    r, s = params["signature"].split(",")
+    privkey = load_key(params["username"])
+    try:
+        assert privkey.pubkey().verify(challenge, (int(r), int(s)))
+    except Exception:
+        text = "Verify failed! Expected signature:\n"
+        r, s = privkey.sign(challenge)
+        text += f"{r},{s}"
+        # ruleid: py-taint-signature-oracle
+        return web.Response(status=400, text=text)
+    # ok: py-taint-signature-oracle
+    return web.Response(status=200, text="OK")
+
+
+@app.route("/token")
+def issue_token():
+    # ok: py-taint-signature-oracle
+    return jsonify(token=signer.sign(current_user.name))
+
+
+# FastAPI: typed parameters / pydantic models / Depends() are not operator objects
+@api.post("/register")
+def register_user(user_in: UserIn):
+    # ok: py-taint-nosqli
+    return users.find_one({"username": user_in.username})
+
+
+@api.get("/profile")
+def get_profile(current_user_id: str = Depends(get_current_user_id)):
+    # ok: py-taint-nosqli
+    return users.find_one({"_id": current_user_id})
+
+
+@api.get("/lookup")
+def lookup(username: str):
+    # ok: py-taint-nosqli
+    return users.find_one({"username": username})
+
+
+@api.post("/search")
+def search_users(filt: dict):
+    # ruleid: py-taint-nosqli
+    return users.find_one(filt)
+
+
+@api.post("/search2")
+async def search_users2(filt: Any = Body(...)):
+    # ruleid: py-taint-nosqli
+    return users.find_one({"username": filt})
