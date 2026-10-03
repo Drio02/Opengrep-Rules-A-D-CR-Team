@@ -36,6 +36,7 @@ python3 webapp/server.py --root path/to/services   # http://localhost:8765/
 See the [wiki](wiki/Home.md):
 
 - [Getting Started](wiki/Getting-Started.md)
+- [Competition Deployment (plug and play)](wiki/Competition-Deployment.md)
 - [Findings Dashboard (web app)](wiki/Dashboard.md)
 - [A&D Game Playbook](wiki/AD-Game-Playbook.md)
 - [Repository Layout](wiki/Repository-Layout.md)

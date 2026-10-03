@@ -21,6 +21,7 @@ and also something to try against the other teams.
 | Page | What it covers |
 |---|---|
 | [Getting Started](Getting-Started.md) | Install Opengrep, run the first scan, read the output |
+| [Competition Deployment](Competition-Deployment.md) | Plug-and-play: settings file + scripts to set up laptops and the dashboard on the exploiter, troubleshooting |
 | [Findings Dashboard](Dashboard.md) | Web app: analyze all services, pull their latest code, label and assign findings |
 | [A&D Game Playbook](AD-Game-Playbook.md) | How to use the rules during the game, minute by minute |
 | [Repository Layout](Repository-Layout.md) | Folders, rule file types, metadata, naming |

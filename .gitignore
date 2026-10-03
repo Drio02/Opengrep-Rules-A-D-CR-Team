@@ -2,3 +2,6 @@
 opengrep-out/
 opengrep-reports/
 __pycache__/
+
+# competition settings (IPs, key paths): never commit
+deploy/competition.env

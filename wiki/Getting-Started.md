@@ -49,6 +49,11 @@ scripts/test-rules.sh        # optional: validates every pack and runs the fixtu
 
 ## Setup checklist for a competition
 
+> **Shortcut:** the [Competition Deployment](Competition-Deployment.md) guide
+> automates the steps below (and the dashboard on the exploiter) with
+> `deploy/competition.env` + `deploy/0*-*.sh`. The manual checklist stays here
+> for reference.
+
 Do this before the game starts, on the laptop that will run the dashboard
 (Linux, or WSL on Windows):
 
