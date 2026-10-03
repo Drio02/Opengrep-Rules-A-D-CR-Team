@@ -88,7 +88,9 @@ sets rarely cover them:
 | Unauthenticated sensitive route | `/admin/flags` without a decorator/middleware; PHP redirect without `exit` | `*-sensitive-route-without-*`, `php-redirect-without-exit`, `java-spring-permitall-sensitive-path` |
 | Language traps | PHP `in_array` without strict, PHP/Ruby `$` matching before a newline, Python `assert` stripped by `-O`, Java `==` on strings, Express query arrays | `php-in-array-loose`, `php-preg-match-dollar-allows-newline`, `ruby-regex-validation-line-anchors`, `py-assert-used-for-auth`, `java-string-reference-compare`, `js-type-confusion-query-array` |
 | Framework RCE gadgets | `res.render(view, req.query)` (EJS), Thymeleaf view-name injection, Jackson default typing, Python `str.format` on user input | `js-res-render-user-options`, `java-spring-view-name-injection`, `java-jackson-polymorphic-typing`, `py-taint-format-string-injection` |
-| Native services | Stack overflows, format strings, UAF, off-by-one | `c/*.yaml` |
+| Hand-rolled signatures | DSA verify without `0 < r,s < q` (r=1, s=0 verifies anything), nonce derived from the public key, "expected signature" in the login error | `py-crypto-dsa-verify-no-range-check`, `py-crypto-dsa-static-nonce`, `py-taint-signature-oracle` |
+| Ownership never checked | `/profile/{user}` shows private data to any logged-in session (`if "user" in session`) | `py-idor-session-presence-only` |
+| Native services | Stack overflows, format strings, UAF, off-by-one, `char c = fgetc()` vs `EOF`, `%02x` of a signed char | `c/*.yaml` |
 | Deployment | Redis/Postgres/Mongo published on 0.0.0.0 with default passwords; nginx alias traversal | `infra/*.yaml` |
 
 ### 3. New languages
@@ -99,8 +101,39 @@ sets rarely cover them:
   Java pack had no frontend rules).
 - **Infra**: the vulnbox configuration itself.
 
+## Validation against demo A&D services
+
+The rule packs were run with `scripts/scan.sh` against the Attacking-Lab demo
+services (`demo-service-*`) and compared with the vulnerabilities documented
+in each upstream repository. Every documented bug in a service that ships
+source code is now reported:
+
+| Service | Documented vulnerability | Rule | Location |
+|---|---|---|---|
+| fastvuln | `/backdoor` returns any user's profile without auth | `py-sensitive-route-without-auth` | `main.py:160` |
+| fireworx | DSA verify accepts r = 1, s = 0 (mod q) | `py-crypto-dsa-verify-no-range-check` | `crypto.py:85` |
+| fireworx | static nonce `k = H(y)` + expected signature leaked on login failure | `py-crypto-dsa-static-nonce`, `py-taint-signature-oracle` | `crypto.py:59`, `app.py:349` |
+| fireworx | (not in the docs) `/profile/{username}` shows the private key to any logged-in user | `py-idor-session-presence-only` | `app.py:385` |
+| stldoctor | `char c = fgetc(f)` compared with `EOF` (0xff truncates the model name, so the attacker controls the stored hash) | `c-char-eof-comparison` | `util.c:82` |
+| stldoctor | `sprintf("%02x", signed char)` overflows the static hash buffer into `loggedin` | `c-sprintf-hex-signed-char` | `util.c:59` |
+| stonksexchange | NoSQL injection: `{"$ne": null}` username stored in the session | `js-taint-nosqli` | `routes/index.js:63,85` |
+| bambinotes | heap overflow: fixed-size `read()` into the smaller first note, then `note[n] = 0` | `c-off-by-one-null-terminator` (on the upstream source) | `bambi-notes.c:341` |
+
+The same run was used to remove false positives:
+- typed FastAPI parameters / `Depends()` values as NoSQL sources;
+- `innerHTML = "literal"`;
+- `vprintf(fmt, ap)` inside variadic wrappers and `#define`'d format strings;
+- uses on a `goto` cleanup label after `return`;
+- `buf[strlen(buf)-1]` behind a non-empty check;
+- indexes checked by `VALID_*()` macros;
+- cosmetic `random` calls.
+
+Binary-only services (bambinotes ships only the ELF) cannot be analyzed by
+opengrep; `scan.sh` / `scan.ps1` now print a warning instead of a silent
+"0 findings".
+
 ## Not covered (yet)
 
 Kotlin, Elixir, Haskell, Scala, Lua and other languages; business-logic bugs that need semantic
-understanding (e.g. race conditions in balance transfers, crypto protocol
-flaws); and binaries shipped without source.
+understanding (e.g. race conditions in balance transfers, most crypto protocol
+flaws beyond the hand-rolled DSA checks); and binaries shipped without source.

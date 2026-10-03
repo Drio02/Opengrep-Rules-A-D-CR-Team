@@ -76,10 +76,30 @@ esac
 JOB_ARGS=()
 [[ -n "${JOBS:-}" ]] && JOB_ARGS=(--jobs "$JOBS")
 
+# native binaries are invisible to opengrep (pwn services often ship only
+# the ELF), so say it loudly instead of printing "0 findings"
+find_binaries() {
+  find "$TARGET" -type f -size +1k \( -perm -u+x -o -name '*.so' -o -name '*.exe' -o -name '*.dll' \) \
+    -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/.venv/*' -print0 2>/dev/null |
+  while IFS= read -r -d '' f; do
+    case "$(head -c 4 "$f" 2>/dev/null | od -An -tx1 | tr -d ' \n')" in
+      7f454c46|4d5a*) echo "${f#"$TARGET"/}" ;;
+    esac
+  done
+}
+BINS=()
+while IFS= read -r b; do BINS+=("$b"); done < <(find_binaries)
+
 mkdir -p "$OUT_DIR"
 echo "[*] service : $TARGET"
 echo "[*] packs   : ${PACKS[*]}"
 echo "[*] reports : $OUT_DIR"
+if [[ ${#BINS[@]} -gt 0 ]]; then
+  echo "[!] native binaries, NOT analyzed by opengrep (reverse them): ${BINS[*]:0:5}"
+  if [[ -z "$(detect_packs)" ]]; then
+    echo "[!] binary-only service: no source code found, only the infra pack ran"
+  fi
+fi
 
 # --x-ignore-semgrepignore-files: the default ignore list skips tests/,
 #   vendor dirs, etc. A&D services sometimes keep real code there.
