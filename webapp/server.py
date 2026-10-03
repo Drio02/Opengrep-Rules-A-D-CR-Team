@@ -8,6 +8,7 @@ patcher assignee.
 
     python3 webapp/server.py [--root ~/vulnbox/services] [--port 8765]
                              [--host 127.0.0.1] [--data DIR]
+                             [--allow 10.60.39.0/24] [--deny 10.60.39.1,10.60.39.2]
     python3 webapp/server.py --set-password      # change the login password
 
 Only the Python standard library is used. State (settings, patchers,
@@ -76,6 +77,8 @@ DEFAULT_SETTINGS = {
     "severity": "INFO",
     "parallel": 3,
     "opengrep": "",
+    "allow": [],   # IP allowlist (CIDRs); empty = every IP
+    "deny": [],    # always rejected, even inside "allow"
 }
 
 
@@ -92,6 +95,72 @@ def hash_password(password, salt=None, iters=PBKDF2_ITERS):
 def check_password(password, rec):
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(rec["salt"]), rec["iters"]).hex()
     return hmac.compare_digest(digest, rec["hash"])
+
+
+def parse_networks(value):
+    """'10.60.39.0/24, 10.60.39.2' (or a list) -> ['10.60.39.0/24', '10.60.39.2/32']."""
+    items = value if isinstance(value, list) else re.split(r"[\s,;]+", str(value))
+    nets = []
+    for item in (str(i).strip() for i in items):
+        if not item:
+            continue
+        if item.lower() in ("any", "all", "*"):
+            return []
+        try:
+            nets.append(str(ipaddress.ip_network(item, strict=False)))
+        except ValueError:
+            raise ValueError(f"not an IP or CIDR: {item!r}")
+    if len(nets) > 200:
+        raise ValueError("too many entries (max 200)")
+    return list(dict.fromkeys(nets))
+
+
+def client_ip(raw):
+    ip = ipaddress.ip_address(raw.split("%", 1)[0])
+    return ip.ipv4_mapped or ip if ip.version == 6 else ip
+
+
+class AccessPolicy:
+    """IP allow / deny list checked on every new connection. Loopback is
+    always allowed (local console / SSH tunnel), so a bad rule can be fixed."""
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.allow, self.deny = [], []
+        self.last_log = {}
+
+    def set(self, allow, deny):
+        with self.lock:
+            self.allow = [ipaddress.ip_network(n) for n in allow]
+            self.deny = [ipaddress.ip_network(n) for n in deny]
+
+    @staticmethod
+    def check(ip, allow, deny):
+        if ip.is_loopback:
+            return True
+        if any(ip.version == n.version and ip in n for n in deny):
+            return False
+        return not allow or any(ip.version == n.version and ip in n for n in allow)
+
+    def allowed(self, raw):
+        try:
+            ip = client_ip(raw)
+        except ValueError:
+            return False
+        with self.lock:
+            ok = self.check(ip, self.allow, self.deny)
+            if not ok and time.time() - self.last_log.get(raw, 0) > 60:
+                self.last_log[raw] = time.time()
+                print(f"[!] blocked connection from {raw} (IP not allowed)", file=sys.stderr, flush=True)
+        return ok
+
+
+class DashboardServer(http.server.ThreadingHTTPServer):
+    policy = None
+
+    def verify_request(self, request, client_address):
+        # rejected before reading the request: the connection is just closed
+        return self.policy.allowed(client_address[0])
 
 
 class Auth:
@@ -757,7 +826,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             user = self.current_user()
             return self.send(200, {"user": user, "defaultPassword": bool(user) and self.auth.is_default(user),
                                    "mustChange": bool(user) and self.must_change_password(user),
-                                   "minPassword": MIN_PASSWORD})
+                                   "minPassword": MIN_PASSWORD, "ip": str(client_ip(self.client_address[0]))})
         if path == "/api/state":
             with st.lock:
                 scan = st.scan or {}
@@ -880,10 +949,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 new["severity"] = data["severity"]
             if "parallel" in data:
                 new["parallel"] = max(1, min(16, int(data["parallel"])))
+            if "allow" in data or "deny" in data:
+                if "allow" in data:
+                    new["allow"] = parse_networks(data["allow"])
+                if "deny" in data:
+                    new["deny"] = parse_networks(data["deny"])
+                me = client_ip(self.client_address[0])
+                if not AccessPolicy.check(me, [ipaddress.ip_network(n) for n in new["allow"]],
+                                          [ipaddress.ip_network(n) for n in new["deny"]]):
+                    raise ValueError(f"these rules would block your own IP ({me}); "
+                                     "add it to Allow or fix Deny")
             with st.lock:
                 old = st.state["settings"]
                 st.state["settings"] = new
                 st.save()
+            self.server.policy.set(new["allow"], new["deny"])   # applies to the next connection
             if (old["root"], old["ssh_key"]) != (new["root"], new["ssh_key"]):
                 self.jobs.access.trigger()
             return {"settings": new, "services": [n for n, _ in discover_services(new["root"])]}
@@ -963,6 +1043,11 @@ def main():
     ap.add_argument("--host", default="127.0.0.1", help="default 127.0.0.1 (localhost only)")
     ap.add_argument("--data", default=os.path.expanduser("~/.local/share/opengrep-dashboard"),
                     help="state + scan output directory")
+    ap.add_argument("--allow", default=None,
+                    help="only these IPs / CIDRs may connect, e.g. 10.60.39.0/24 ('any' = everybody); "
+                         "saved, also editable in Settings")
+    ap.add_argument("--deny", default=None,
+                    help="IPs / CIDRs always rejected, e.g. 10.60.39.1,10.60.39.2 (vulnbox, NAT gateway)")
     ap.add_argument("--set-password", action="store_true",
                     help=f"set the password of the '{DEFAULT_USER}' login (asked on the terminal) and exit")
     args = ap.parse_args()
@@ -977,6 +1062,18 @@ def main():
         store.state["accounts"][DEFAULT_USER] = hash_password(pw)
         store.save()
         sys.exit(f"[*] password of '{DEFAULT_USER}' changed (restart the dashboard to log everybody out)")
+    try:
+        if args.allow is not None:
+            store.state["settings"]["allow"] = parse_networks(args.allow)
+        if args.deny is not None:
+            store.state["settings"]["deny"] = parse_networks(args.deny)
+    except ValueError as e:
+        sys.exit(f"[!] {e}")
+    if args.allow is not None or args.deny is not None:
+        store.save()
+    policy = AccessPolicy()
+    policy.set(store.state["settings"]["allow"], store.state["settings"]["deny"])
+    DashboardServer.policy = policy
     if args.root:
         root = os.path.abspath(os.path.expanduser(args.root))
         if not os.path.isdir(root):
@@ -1002,7 +1099,7 @@ def main():
     httpd, error = None, None
     for port in candidates:
         try:
-            httpd = http.server.ThreadingHTTPServer((args.host, port), Handler)
+            httpd = DashboardServer((args.host, port), Handler)
             break
         except OSError as e:
             error = e

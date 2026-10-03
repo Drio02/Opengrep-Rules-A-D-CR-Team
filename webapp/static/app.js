@@ -61,8 +61,10 @@
     if (!settingsShown) {
       $("branch").value = st.branch; $("ssh_key").value = st.ssh_key; $("opengrep").value = st.opengrep;
       $("severity").value = st.severity; $("parallel").value = st.parallel; $("skip_compose").checked = !!st.skip_compose;
+      $("allow").value = (st.allow || []).join(", "); $("deny").value = (st.deny || []).join(", ");
       settingsShown = true;
     }
+    renderAccessInfo();
     var sc = S.state.scan || {};
     $("last-run").textContent = sc.finished
       ? "Last analysis " + sc.finished.replace("T", " ") + " - " + sc.root +
@@ -85,8 +87,13 @@
     api("POST", "/api/settings", {
       branch: $("branch").value, ssh_key: $("ssh_key").value, opengrep: $("opengrep").value,
       severity: $("severity").value, parallel: Number($("parallel").value) || 1,
-      skip_compose: $("skip_compose").checked
-    }).then(function () { flash("Settings saved"); refresh(true); })
+      skip_compose: $("skip_compose").checked,
+      allow: $("allow").value, deny: $("deny").value
+    }).then(function () {
+      flash("Settings saved - IP rules apply to new connections right away");
+      settingsShown = false;   // show the values as the server normalized them
+      refresh(true);
+    })
       .catch(function (e) { flash(e.message, true); });
   });
 
@@ -105,7 +112,16 @@
       $("whoami").textContent = "Logged in as " + me.user;
       $("default-pw").hidden = !me.defaultPassword;
       S.minPassword = me.minPassword;
+      S.myIp = me.ip;
+      renderAccessInfo();
     }).catch(function () {});
+  }
+  function renderAccessInfo() {
+    if (!S.state) return;
+    var st = S.state.settings, allow = st.allow || [], deny = st.deny || [];
+    $("ip-info").textContent = "Your IP as seen by the server: " + (S.myIp || "?") + ". Active now: " +
+      (allow.length ? "only " + allow.join(", ") : "every IP") + (deny.length ? ", except " + deny.join(", ") : "") +
+      ". Localhost is always allowed, and a rule that would block your own IP is refused.";
   }
   $("btn-logout").addEventListener("click", function () {
     api("POST", "/api/logout", {}).then(function () { location.replace("/"); }, function () { location.replace("/"); });

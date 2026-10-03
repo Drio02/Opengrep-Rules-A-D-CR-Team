@@ -97,9 +97,11 @@ Do this before the game starts, on the laptop that will run the dashboard
    starts; if not, it tells you what to fix.
 7. Click **Run analysis** once to warm up and check every service shows
    findings (a "binary-only" service has to be reversed by hand).
-8. To share with the team: restart with `--host <your VPN/LAN IP>` and share
-   the URL and the new password over a private team channel. Never expose it
-   on the game network interface.
+8. To share with the team: restart with `--host <your VPN/LAN IP>`, limit it
+   to the team with `--allow <team subnet> --deny <vulnbox>,<gateway>` (or in
+   *Settings*; see [IP access control](Dashboard.md#ip-access-control)), ideally
+   also with `iptables` on the host, and share the URL and the new password
+   over a private team channel.
 
 Details: [Findings Dashboard](Dashboard.md).
 

@@ -25,6 +25,8 @@ so every team can read the default password.
 | `--port` | `8765`, else next free | Never `3001` nor a port declared by the services. Without `--port`, if `8765` is taken or used by a service, the next free port is picked and printed. An explicit `--port` that collides is refused |
 | `--host` | `127.0.0.1` | Use `0.0.0.0` to share with the team (see below) |
 | `--data` | `~/.local/share/opengrep-dashboard` | Settings, labels and scan output. Never written inside the services |
+| `--allow` | everybody | Only these IPs / CIDRs may connect (`10.60.39.0/24`), `any` clears it. Saved; also in *Settings* |
+| `--deny` | none | IPs / CIDRs always rejected, even inside `--allow` (`10.60.39.1,10.60.39.2`). Saved; also in *Settings* |
 | `--set-password` | | Set the `patcher` password on the terminal and exit (also the way to recover a forgotten password) |
 
 From WSL, `http://localhost:8765/` also opens in the Windows browser.
@@ -68,6 +70,38 @@ Every page and API call needs a login, also on localhost:
 Forgot the password: stop the server, run
 `python3 webapp/server.py --set-password` (same `--data` if you use one), and
 start it again.
+
+### IP access control
+
+A second layer next to the login (and to `iptables` on the host): every new
+connection is checked against an allow / deny list **before the request is
+read**; a rejected IP gets the connection closed, it does not even see the
+login page.
+
+- **Allow**: only these IPs / CIDRs may connect (empty = everybody).
+- **Deny**: always rejected, even when inside *Allow* (e.g. the vulnbox,
+  which other teams attack all game long, and the NAT/gateway address of the
+  team subnet if attacks arrive from it).
+- Set them with `--allow` / `--deny` at start or in *Settings* (saved in
+  `state.json`, kept across restarts; the start flags replace the saved ones).
+- A change in *Settings* applies **immediately** to the next connection,
+  without restart, also to browsers that are already logged in.
+- Localhost is always allowed (local console, SSH tunnel), and *Settings*
+  refuses rules that would block the IP you are saving them from, so a typo
+  cannot lock the team out.
+- Blocked connections are printed on the server console (once per IP and
+  minute).
+
+ECSC 2026 example (team subnet `10.60.39.0/24`, vulnbox `.2`, exploiter `.3`):
+
+```bash
+python3 webapp/server.py --root ~/services --host 10.60.39.3 \
+    --allow 10.60.39.0/24 --deny 10.60.39.1,10.60.39.2
+```
+
+Check on the vulnbox where attack traffic comes from (`ss -tn`, service
+logs): if other teams arrive with an address of your own subnet (NAT), put
+that address in *Deny* or switch *Allow* to the explicit VPN IPs of the team.
 
 ### Sharing with the team
 
