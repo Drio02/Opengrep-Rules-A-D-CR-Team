@@ -30,8 +30,14 @@ export OPENGREP=/opt/tools/opengrep          # bash
 $env:OPENGREP = "C:\tools\opengrep.exe"      # PowerShell (or pass -Opengrep)
 ```
 
-Optional, needed only for `triage.py` and `gen-catalog.py`: Python 3, plus
-`pip install pyyaml` for the catalog generator.
+Also needed:
+
+- **Python 3.7+** (standard library only) for `triage.py`, the HTML report and
+  the [dashboard](Dashboard.md). `pip install pyyaml` only for
+  `gen-catalog.py`.
+- **git** and **bash** for the dashboard and `scan-bulk.sh`. On Windows run
+  them inside **WSL** (Ubuntu): install Opengrep there too
+  (`~/.local/bin/opengrep`).
 
 ## 2. Clone the rules
 
@@ -40,6 +46,58 @@ git clone https://github.com/Drio02/Opengrep-Rules-A-D-CR-Team.git
 cd Opengrep-Rules-A-D-CR-Team
 scripts/test-rules.sh        # optional: validates every pack and runs the fixtures
 ```
+
+## Setup checklist for a competition
+
+Do this before the game starts, on the laptop that will run the dashboard
+(Linux, or WSL on Windows):
+
+1. **Tools**: `opengrep --version`, `python3 --version` (3.7+), `git --version`.
+2. **Rules**: clone this repo (above) and `git pull` the latest `main`.
+3. **Services on the laptop**, in one directory with one sub-directory per
+   service (any layout below works):
+
+   | Situation | How to get them |
+   |---|---|
+   | Vulnbox over SSH (ECSC-style) | `backup-services-v2.sh` snapshots every service into a git repo on the vulnbox and clones them locally (`git clone root@<vulnbox>:/root/services/<svc>`) |
+   | Organizers give git repositories | `git clone` each one into the services directory |
+   | Tarballs / zip / `scp -r` | Extract them into the services directory (no git: the dashboard scans them but does not pull) |
+
+   Supported layouts: a directory of services (each with its own
+   `Dockerfile` / compose), a FAUST-style directory with one
+   `docker-compose.yml` at the top and one folder per service, or a single
+   service directory (it becomes the only service).
+4. **SSH key for git pulls** (only for SSH remotes such as the vulnbox):
+
+   ```bash
+   install -m 600 /dev/null ~/.ssh/vulnbox   # create it with the right mode
+   nano ~/.ssh/vulnbox                       # paste the full BEGIN/END block
+   ssh -i ~/.ssh/vulnbox root@<vulnbox> true # must not ask for a password
+   ```
+
+   Keep the key in `~/.ssh` (a key under `/mnt/c/...` on WSL is world-readable
+   and ssh refuses it). A key loaded in `ssh-agent` also works without setting
+   it. HTTPS remotes need a git credential helper or token.
+5. **Start the dashboard**:
+
+   ```bash
+   python3 webapp/server.py --root ~/vulnbox/services
+   ```
+
+   It listens on `http://localhost:8765/` (or the next free port that no
+   service uses; it never takes `3001` or a port declared by the services).
+   On WSL the URL also opens in the Windows browser.
+6. In the dashboard, open *Settings*: set *SSH key for git* (`~/.ssh/vulnbox`),
+   the branch to pull (default `main`; the remote's default branch is used
+   when it does not exist), *Skip docker-compose files* (on by default). The
+   **git access banner** must turn green ("Git access OK") before the game
+   starts; if not, it tells you what to fix.
+7. Click **Run analysis** once to warm up and check every service shows
+   findings (a "binary-only" service has to be reversed by hand).
+8. To share with the team: restart with `--host <your VPN/LAN IP>` and send the
+   printed URL with its `#token=...` privately.
+
+Details: [Findings Dashboard](Dashboard.md).
 
 ## 3. Scan a service
 

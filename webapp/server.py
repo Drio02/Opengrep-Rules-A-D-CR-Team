@@ -84,8 +84,18 @@ def run(cmd, cwd=None, env=None, timeout=120):
 # ---------------------------------------------------------------------------
 # services discovery / git helpers
 # ---------------------------------------------------------------------------
+SERVICE_MARKERS = ("Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml")
+
+
+def _has_marker(path):
+    return any(os.path.isfile(os.path.join(path, m)) for m in SERVICE_MARKERS)
+
+
 def discover_services(root):
-    """Sub-directories of root that look like services (same rules as scan-bulk)."""
+    """Sub-directories of root that look like services (same rules as scan-bulk).
+
+    If root itself is a service (Dockerfile / compose at the top and no
+    sub-directory with its own), it is returned as the only service."""
     out = []
     if not root or not os.path.isdir(root):
         return out
@@ -99,25 +109,56 @@ def discover_services(root):
                 and os.path.isfile(os.path.join(path, "scripts", "triage.py"))):
             continue
         out.append((name, path))
+    if _has_marker(root) and not any(_has_marker(p) for _, p in out):
+        return [(os.path.basename(os.path.normpath(root)) or "service", root)]
     return out
 
 
+PORT_FILE = re.compile(r"(?i)^(\.env.*|.*\.env|(docker-)?compose.*\.ya?ml|.*dockerfile.*|xinetd.*|"
+                       r".*\.conf|.*\.ini|.*\.toml|entrypoint.*\.sh|start.*\.sh|run.*\.sh)$")
+PORT_PATTERNS = [
+    r"(?im)^\s*(?:export\s+)?[\w.]*port\w*\s*[=:]\s*['\"]?(\d{2,5})['\"]?\s*$",  # PORT=9000, port: 80
+    r"(?im)^\s*port\s*=\s*(\d{2,5})",                                            # xinetd
+    r"(?im)\bpublished:\s*['\"]?(\d{2,5})",                                      # compose long syntax
+    r"(?im)\btarget:\s*(\d{2,5})\s*$",
+    r"(?m)^\s*-\s*['\"]?(?:[\d.]+:)?(\d{2,5})(?:/(?:tcp|udp))?['\"]?\s*$",      # - "8080"
+    r"(?i)TCP\d?-LISTEN:(\d{2,5})",                                              # socat
+    r"(?im)^\s*listen\s+(?:[\w.\[\]:]+:)?(\d{2,5})\b",                           # nginx
+    r"--port[= ](\d{2,5})\b",
+]
+
+
 def service_ports(root):
-    """Ports declared by the services: .env *PORT=, compose ports, EXPOSE."""
+    """Ports the services declare anywhere near their deployment files:
+    .env / compose (short and long syntax, ${VAR:-default}), Dockerfile
+    EXPOSE, xinetd / socat / nginx, --port flags."""
     ports = set()
+    files_to_read = []
+    if root and os.path.isdir(root):
+        # top-level files of the services directory (one compose for all services)
+        files_to_read += [os.path.join(root, f) for f in os.listdir(root)
+                          if PORT_FILE.match(f) and os.path.isfile(os.path.join(root, f))]
     for _, path in discover_services(root):
-        for fname in (".env", "docker-compose.yml", "docker-compose.yaml",
-                      "compose.yml", "compose.yaml", "Dockerfile"):
-            try:
-                with open(os.path.join(path, fname), encoding="utf-8", errors="replace") as fh:
-                    text = fh.read()
-            except OSError:
+        base_depth = path.rstrip(os.sep).count(os.sep)
+        for cur, dirs, files in os.walk(path):
+            dirs[:] = [d for d in dirs if not d.startswith(".") and d not in SKIP_DIRS
+                       and cur.count(os.sep) - base_depth < 2]
+            files_to_read += [os.path.join(cur, f) for f in files if PORT_FILE.match(f)]
+    for fpath in sorted(set(files_to_read)):
+        try:
+            if os.path.getsize(fpath) > 256 * 1024:
                 continue
-            ports.update(int(p) for p in re.findall(r"(?im)^\s*\w*PORT\w*\s*=\s*(\d{2,5})\s*$", text))
-            ports.update(int(p) for p in re.findall(r"(?im)^\s*EXPOSE\s+(\d{2,5})", text))
-            # "8080:80", "${SERVICE_PORT:-9000}:${SERVICE_PORT:-9000}"
-            for a, b in re.findall(r"(\d{2,5})\}?\s*:\s*\$?\{?[\w:-]*?(\d{2,5})", text):
-                ports.update((int(a), int(b)))
+            with open(fpath, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for pat in PORT_PATTERNS:
+            ports.update(int(p) for p in re.findall(pat, text))
+        for line in re.findall(r"(?im)^\s*EXPOSE\s+(.+)$", text):
+            ports.update(int(p) for p in re.findall(r"\b(\d{2,5})\b", line))
+        # "8080:80", "127.0.0.1:8080:80", "${SERVICE_PORT:-9000}:${SERVICE_PORT:-9000}"
+        for a, b in re.findall(r"(\d{2,5})\}?\s*:\s*\$?\{?[\w:-]*?(\d{2,5})", text):
+            ports.update((int(a), int(b)))
     return {p for p in ports if 0 < p < 65536}
 
 
@@ -180,6 +221,16 @@ GIT_ERRORS = [
     ("timed out after", "unreachable", "no answer from the remote", "is the VPN up and the vulnbox reachable?"),
     ("does not appear to be a git repository", "repo", "remote path is not a git repository",
      "run the backup script once to create the repos on the vulnbox"),
+    ("detected dubious ownership", "ownership", "repository owned by another user (git safe.directory)",
+     "run the dashboard as the owner of the services, or chown them to this user"),
+    ("could not read Username", "auth", "HTTPS remote needs credentials",
+     "use an SSH remote with the key in Settings, or a git credential helper / token for HTTPS"),
+    ("Authentication failed", "auth", "HTTPS authentication failed",
+     "check the token / credential helper for this remote"),
+    ("Repository not found", "repo", "repository not found (or no access)",
+     "check the remote URL and that the key / token can read it"),
+    ("terminal prompts disabled", "auth", "remote asked for a username/password",
+     "use an SSH remote with the key in Settings, or a git credential helper"),
 ]
 
 
@@ -200,6 +251,9 @@ def check_git_access(root, ssh_key):
             no_git.append(name)
             continue
         rc, url = run(["git", "-C", path, "remote", "get-url", "origin"], timeout=10)
+        if rc != 0 and "dubious ownership" in url:
+            hosts.setdefault("(local repository ownership)", []).append((name, path))
+            continue
         if rc != 0 or not url:
             no_remote.append(name)
             continue
@@ -275,9 +329,18 @@ def pull_service(path, branch, ssh_key):
     rc, _ = run(["git", "-C", path, "rev-parse", "--verify", "--quiet", f"origin/{target}"])
     fallback = ""
     if rc != 0:
-        # the remote has no <branch> (e.g. vulnbox repos use master): use its default
+        # the remote has no <branch> (e.g. vulnbox repos use master): use its
+        # default branch, then main/master, then what the current branch
+        # tracks, then the remote's only branch (trunk, develop, ...)
         rc, ref = run(["git", "-C", path, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
         candidates = ([ref.split("/", 1)[1]] if rc == 0 and "/" in ref else []) + ["main", "master"]
+        rc, up = run(["git", "-C", path, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"])
+        if rc == 0 and up.startswith("origin/"):
+            candidates.append(up.split("/", 1)[1])
+        _, refs = run(["git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin"])
+        remote_branches = [r.split("/", 1)[1] for r in refs.splitlines() if "/" in r and r != "origin/HEAD"]
+        if len(remote_branches) == 1:
+            candidates.append(remote_branches[0])
         for c in candidates:
             if run(["git", "-C", path, "rev-parse", "--verify", "--quiet", f"origin/{c}"])[0] == 0:
                 fallback, target = f" (origin has no '{branch}', used '{c}')", c
@@ -736,7 +799,8 @@ def is_loopback(host):
 def main():
     ap = argparse.ArgumentParser(description="A&D findings dashboard")
     ap.add_argument("--root", default="", help="services directory (can also be set in the UI)")
-    ap.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"default {DEFAULT_PORT}")
+    ap.add_argument("--port", type=int, default=None,
+                    help=f"default {DEFAULT_PORT}, or the next free port not used by the services")
     ap.add_argument("--host", default="127.0.0.1", help="default 127.0.0.1 (localhost only)")
     ap.add_argument("--data", default=os.path.expanduser("~/.local/share/opengrep-dashboard"),
                     help="state + scan output directory")
@@ -752,7 +816,7 @@ def main():
         store.save()
 
     used = service_ports(store.state["settings"]["root"]) | RESERVED_PORTS
-    if args.port in used:
+    if args.port is not None and args.port in used:
         sys.exit(f"[!] port {args.port} is reserved or used by a service "
                  f"({', '.join(map(str, sorted(used)))}); pick another with --port")
 
@@ -761,13 +825,27 @@ def main():
         token = secrets.token_urlsafe(18)
     access = GitAccess(store)
     Handler.store, Handler.jobs, Handler.token = store, Jobs(store, access), token
+
+    # explicit --port: that one or nothing. Default: 8765, else the next free
+    # port that no service declares (another competition may use 8765)
+    if args.port is not None:
+        candidates = [args.port]
+    else:
+        candidates = [p for p in range(DEFAULT_PORT, DEFAULT_PORT + 200) if p not in used]
+    httpd, error = None, None
+    for port in candidates:
+        try:
+            httpd = http.server.ThreadingHTTPServer((args.host, port), Handler)
+            break
+        except OSError as e:
+            error = e
+    if httpd is None:
+        sys.exit(f"[!] cannot listen on {args.host}:{candidates[0]}: {error}")
+    args.port = httpd.server_address[1]
+    if args.port != DEFAULT_PORT and len(candidates) > 1:
+        print(f"[*] port {DEFAULT_PORT} is busy or used by a service, using {args.port}")
     if store.state["settings"]["root"]:
         access.trigger()  # detect missing SSH key / unreachable vulnbox right away
-
-    try:
-        httpd = http.server.ThreadingHTTPServer((args.host, args.port), Handler)
-    except OSError as e:
-        sys.exit(f"[!] cannot listen on {args.host}:{args.port}: {e}")
     shown = "localhost" if is_loopback(args.host) else args.host
     if shown in ("0.0.0.0", "::"):
         try:  # the address teammates can reach (no packet is sent)

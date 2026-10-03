@@ -17,13 +17,31 @@ python3 webapp/server.py --root ~/demo-ad
 
 | Option | Default | |
 |---|---|---|
-| `--root` | (set in the UI) | Directory with one sub-directory per service |
-| `--port` | `8765` | Refuses `3001` and any port declared by the services (`.env` `*PORT=`, compose `ports:`, Dockerfile `EXPOSE`) |
+| `--root` | (set in the UI) | Directory with one sub-directory per service, or a single service |
+| `--port` | `8765`, else next free | Never `3001` nor a port declared by the services. Without `--port`, if `8765` is taken or used by a service, the next free port is picked and printed. An explicit `--port` that collides is refused |
 | `--host` | `127.0.0.1` | Use `0.0.0.0` to share with the team (see below) |
 | `--data` | `~/.local/share/opengrep-dashboard` | Settings, labels and scan output. Never written inside the services |
 | `--token` | generated | Access token, required when `--host` is not localhost |
 
 From WSL, `http://localhost:8765/` also opens in the Windows browser.
+
+Service ports are read from the deployment files of every service (up to two
+folders deep) and from the top of the services directory: `.env` / `PORT=`,
+compose `ports:` (short `"8080:80"`, `"127.0.0.1:8080:80"`, `"8080"`,
+`${PORT:-9000}`, and long `published:` / `target:` syntax), Dockerfile
+`EXPOSE` (several ports, `/tcp`), xinetd `port =`, socat `TCP-LISTEN:`,
+nginx `listen`, `--port` flags.
+
+### Works with any competition layout
+
+- a directory with one folder per service (each with its own Dockerfile or
+  compose), as on the ECSC vulnbox;
+- a FAUST-style directory with one `docker-compose.yml` at the top and one
+  folder per service;
+- a single service directory (it becomes the only service);
+- services with or without git (tarballs are scanned, just not pulled), any
+  language with a rule pack (Python, JS/TS, PHP, Go, Java, Ruby, Rust, C/C++,
+  C#), names with spaces, and binary-only services (flagged "reverse it").
 
 ### Sharing with the team
 
@@ -49,8 +67,10 @@ bind to `0.0.0.0` without the token, and prefer the team VPN / LAN interface
    the log are shown live.
 3. **Pull latest**: `git fetch` + fast-forward of every service repository to
    `origin/<branch>` (*Settings*, default `main`). If the remote has no such
-   branch, its default branch is used (the vulnbox snapshot repos use
-   `master`). It never switches branches and never overwrites local changes:
+   branch it tries, in order: the remote's default branch, `main`, `master`,
+   the branch the checkout tracks, and the remote's only branch (`trunk`,
+   `develop`, ...). The vulnbox snapshot repos use `master`. It never
+   switches branches and never overwrites local changes:
    a service on another branch, with local commits, or with conflicting local
    edits is reported as skipped / failed and left untouched.
 4. **Pull latest + re-run**: both, one after the other.
@@ -74,6 +94,9 @@ banner with the problem and the fix:
 | broken key file | `the SSH key file could not be loaded` | full BEGIN/END block, LF line endings, no passphrase |
 | VPN down / vulnbox off | `connection timed out`, `no route to host`, ... | bring the VPN up |
 | vulnbox reinstalled | `host key changed` | `ssh-keygen -R <host>` |
+| HTTPS remote (GitHub/GitLab of the organizers) | `HTTPS remote needs credentials` / `authentication failed` | SSH remote + key, or a git credential helper / token |
+| wrong URL or no access | `repository not found` | check the remote URL and the key / token |
+| services copied as root | `repository owned by another user` | run the dashboard as the owner, or `chown` the services |
 
 While every remote fails, *Pull latest* and *Pull latest + re-run* are
 disabled. Saving a key whose permissions are too open is refused right away,
