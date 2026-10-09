@@ -1,0 +1,10 @@
+# scan output when the wrappers are run from inside the repo
+opengrep-out/
+opengrep-reports/
+__pycache__/
+
+# competition settings (IPs, key paths): never commit
+deploy/competition.env
+
+# offline mode: verified opengrep binaries kept for exploiters without internet
+deploy/cache/

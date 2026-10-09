@@ -59,6 +59,7 @@ def register():
     return "ok"
 
 
+# ruleid: py-sensitive-route-without-auth
 @app.post("/profile")
 def profile():
     user = load_user()
@@ -113,3 +114,51 @@ def dev_server():
     from werkzeug.serving import run_simple
     # ruleid: py-werkzeug-debugger-or-pin-disabled
     run_simple("0.0.0.0", 5000, app, use_debugger=True)
+
+
+# FastAPI: /backdoor hands out any profile, no auth dependency
+# ruleid: py-sensitive-route-without-auth
+@api.get("/backdoor", response_model=UserProfile)
+def get_backdoor(username: str):
+    return users.find_one({"username": username})
+
+
+# ok: py-sensitive-route-without-auth
+@api.get("/profile", response_model=UserProfile)
+def get_profile(current_user_id: str = Depends(get_current_user_id)):
+    return users.find_one({"_id": current_user_id})
+
+
+# aiohttp: /profile/{username} shows the private key to ANY logged-in user
+async def handle_profile(request):
+    session = await get_session(request)
+    try:
+        username = request.match_info["username"]
+    except KeyError:
+        username = session["username"]
+    privkey = load_key(username)
+    data = [("name", username)]
+    # ruleid: py-idor-session-presence-only
+    if "username" in session:
+        data += privkey.dict().items()
+    return render(data)
+
+
+async def handle_profile_fixed(request):
+    session = await get_session(request)
+    username = request.match_info["username"]
+    privkey = load_key(username)
+    data = [("name", username)]
+    # ok: py-idor-session-presence-only
+    if "username" in session:
+        if username == session["username"]:
+            data += privkey.dict().items()
+    return render(data)
+
+
+def gen_navbar():
+    # ok: py-weak-random-token
+    if random.randint(0, 5) == 0:
+        return "inspire"
+    # ok: py-weak-random-token
+    return random.choice(quotes)

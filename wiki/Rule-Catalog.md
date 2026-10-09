@@ -6,21 +6,21 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 
 | Pack | Folder | Files | Rules |
 |---|---|---|---|
-| Python | `pyhton/` | 6 | 68 |
-| JavaScript / TypeScript | `js/` | 6 | 70 |
-| PHP | `php/` | 6 | 62 |
-| Go | `go/` | 6 | 55 |
-| Java | `java/` | 5 | 51 |
-| Ruby | `ruby/` | 6 | 54 |
-| Rust | `rust/` | 6 | 54 |
-| C / C++ | `c/` | 2 | 21 |
+| Python | `pyhton/` | 7 | 77 |
+| JavaScript / TypeScript | `js/` | 7 | 75 |
+| PHP | `php/` | 7 | 67 |
+| Go | `go/` | 7 | 60 |
+| Java | `java/` | 6 | 56 |
+| Ruby | `ruby/` | 7 | 59 |
+| Rust | `rust/` | 7 | 59 |
+| C / C++ | `c/` | 3 | 28 |
 | C# / .NET | `csharp/` | 2 | 19 |
 | Infrastructure (compose / Dockerfile / nginx) | `infra/` | 3 | 15 |
-| **Total** | | | **469** |
+| **Total** | | | **515** |
 
 ## Python
 
-### `pyhton/ad-logic.yaml` - A&D logic (12 rules)
+### `pyhton/ad-logic.yaml` - A&D logic (13 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
 |---|---|---|---|---|
@@ -31,7 +31,8 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `py-timing-unsafe-secret-compare` | W | CWE-208 | auth-bypass | Secret/token/signature compared with == or !=. Not constant time and, more importantly in A&D, often the ONLY auth check. Use hmac.compare_… |
 | `py-mass-assignment` | E | CWE-915 | auth-bypass | Request body unpacked straight into a model/object. Attacker adds {"is_admin": true, "role": "admin", "user_id": <victim>} to the JSON. Cop… |
 | `py-assert-used-for-auth` | E | CWE-617 | auth-bypass | Security check implemented with assert. Asserts are stripped under 'python -O' (and raise 500 instead of 403). Use an explicit if/abort(403… |
-| `py-sensitive-route-without-auth` | W | CWE-306 | flag-leak | Route with a sensitive path (admin/flag/export/debug/...) and no auth decorator. Verify it checks the session inside the handler; if not, t… |
+| `py-sensitive-route-without-auth` | W | CWE-306 | flag-leak | Route with a sensitive path (admin/flag/backdoor/profile/export/...) and no auth decorator or dependency. Verify it checks the session insi… |
+| `py-idor-session-presence-only` | W | CWE-639 | flag-leak | The handler takes the target user/object from the request (path or query) and only checks that *some* session exists ("x" in session) befor… |
 | `py-django-debug-or-wildcard-hosts` | W | CWE-489 | flag-leak | Django DEBUG=True leaks settings, SQL queries and stack traces (with local variables) on every error page. |
 | `py-werkzeug-debugger-or-pin-disabled` | E | CWE-489 | rce | Werkzeug debugger enabled (use_debugger / WERKZEUG_DEBUG_PIN=off). /console gives an interactive Python shell -> RCE. |
 | `py-tempfile-mktemp` | W | CWE-377 | integrity | tempfile.mktemp() returns a name but does not create the file: race condition / symlink attack. Use NamedTemporaryFile or mkstemp. |
@@ -57,6 +58,18 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `py-idor-candidate` | W | CWE-639 |  | CANDIDATO IDOR: lookup por id/pk. Verifica owner-check (model.user_id == current_user.id). |
 | `py-flask-debug` | W | CWE-489 |  | Flask corriendo en debug=True expone consola Python interactiva -> RCE. |
 | `py-eval-exec` | E | CWE-95 |  | eval/exec con entrada dinamica = RCE. |
+
+### `pyhton/crypto.yaml` - crypto (7 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `py-crypto-random-for-security` | E | CWE-338 |  | random/numpy.random no son CSPRNG. Para claves/tokens/nonces usa 'secrets' (secrets.token_bytes, secrets.randbits, secrets.choice). |
+| `py-crypto-rsa-weak-keysize` | E | CWE-326 |  | Clave RSA debil (<2048 bits). Para claves nuevas usa >=3072. Afecta pycryptodome y cryptography. |
+| `py-crypto-ecb-mode` | E | CWE-327 |  | Modo ECB nunca es seguro para cifrado. Usa AES-GCM o AES-CBC con MAC. |
+| `py-crypto-hash-md5-sha1-security` | W | CWE-327 |  | MD5/SHA1 estan rotos para firma/password/HMAC-con-llave-corta. Usa SHA-256+ o bcrypt/argon2 para passwords. |
+| `py-crypto-static-iv-nonce` | W | CWE-329 |  | IV/nonce literal pasado directamente a AES.new. Revisa si es constante (bug) o calculado (ok). |
+| `py-crypto-dsa-verify-no-range-check` | E | CWE-347 | auth-bypass | Hand-rolled DSA/ECDSA verify inverts s without first checking 0 < r < q and 0 < s < q. Degenerate signatures such as r = 1, s = 0 (mod q) m… |
+| `py-crypto-dsa-static-nonce` | E | CWE-323 | auth-bypass | DSA/ECDSA nonce k is derived deterministically from data that does not include the message (e.g. k = H(public_key)). Every signature reuses… |
 
 ### `pyhton/extra.yaml` - extra (original) (5 rules)
 
@@ -102,7 +115,7 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `python-tarfile-linkname-unsafe` | E | CWE-22 |  | Tarinfo.linkname is used during archive extraction. Validate symlink and hardlink targets against the extraction directory before creating… |
 | `python-subprocess-tar-extraction` | E | CWE-22 |  | Potentially untrusted TAR archive is extracted using a system command. Validate archive members and link targets before extraction. |
 
-### `pyhton/taint.yaml` - taint / dataflow (11 rules)
+### `pyhton/taint.yaml` - taint / dataflow (12 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
 |---|---|---|---|---|
@@ -117,6 +130,7 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `py-taint-deserialization` | E | CWE-502 | rce | User input reaches an unsafe deserializer (pickle/yaml/jsonpickle/dill/ marshal). Crafted payload = RCE. Use json or yaml.safe_load. |
 | `py-taint-open-redirect` | W | CWE-601 | phishing | User input controls a redirect target. Allow only relative paths (startswith("/") and not "//") or an allowlisted host. |
 | `py-taint-regex-injection` | W | CWE-1333 | dos | User input is compiled as a regular expression. Enables ReDoS (service goes down = SLA loss) and oracle attacks (".*" matches every secret)… |
+| `py-taint-signature-oracle` | E | CWE-209 | auth-bypass | A handler that verifies a signature/MAC also sends a freshly computed signature back to the client (typically "verify failed, expected: ...… |
 
 ## JavaScript / TypeScript
 
@@ -156,6 +170,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `js-idor-candidate` | W | CWE-639 |  | CANDIDATO IDOR: lookup con id de req.params/query. Verifica owner-check antes de responder. |
 | `js-xss-res-send-user` | W | CWE-79 |  | res.send/res.write con contenido dinamico del request y sin content-type JSON. Puede ser XSS reflejado. |
 | `js-prototype-pollution` | W | CWE-1321 |  | Merge/assign profundo con input no confiable = prototype pollution. |
+
+### `js/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `js-crypto-math-random-for-security` | E | CWE-338 |  | Math.random() NO es CSPRNG. Usa crypto.randomBytes() o crypto.randomInt() de Node. |
+| `js-crypto-weak-rsa-keysize` | E | CWE-326 |  | Clave RSA <2048 bits. Usa >=3072. (node:crypto generateKeyPair / node-forge). |
+| `js-crypto-ecb-mode` | E | CWE-327 |  | Modo ECB nunca es seguro. Usa aes-256-gcm o aes-256-cbc con HMAC. |
+| `js-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos para firma/password. Usa sha256+ o bcrypt/argon2. |
+| `js-crypto-static-iv-nonce` | W | CWE-329 |  | IV literal/constante en createCipheriv. En CBC o GCM compromete el cifrado. |
 
 ### `js/extra.yaml` - extra (original) (5 rules)
 
@@ -259,6 +283,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `php-extract-from-request` | E | CWE-915 |  | extract($_GET/$_POST) permite sobrescribir variables (register_globals-like). Bug clasico de CTF. |
 | `php-hardcoded-secret` | W | CWE-798 |  | Constante con pinta de secreto. |
 
+### `php/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `php-crypto-weak-random-for-security` | E | CWE-338 |  | rand()/mt_rand()/uniqid() NO son CSPRNG. Usa random_bytes() o random_int(). |
+| `php-crypto-weak-openssl-key` | E | CWE-326 |  | openssl_pkey_new con bits <2048. Usa >=3072. |
+| `php-crypto-ecb-mode` | E | CWE-327 |  | Modo ECB en openssl/mcrypt nunca es seguro. |
+| `php-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos. Para passwords usa password_hash(); para firma usa SHA-256+. |
+| `php-crypto-static-iv` | W | CWE-329 |  | IV con string literal corta. En CBC/GCM compromete el cifrado. |
+
 ### `php/extra.yaml` - extra (original) (5 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
@@ -352,6 +386,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `go-open-redirect` | W | CWE-601 |  | http.Redirect con URL desde la request sin validar. Verifica whitelist de host. |
 | `go-cors-wildcard-with-credentials` | W | CWE-346 |  | CORS con Origin=* y credenciales. Configuracion inconsistente que suele indicar un fallo. |
 
+### `go/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `go-crypto-math-rand-for-security` | E | CWE-338 |  | math/rand NO es CSPRNG. Para claves/tokens/nonces usa crypto/rand.Reader. |
+| `go-crypto-weak-rsa-keysize` | E | CWE-326 |  | rsa.GenerateKey con <2048 bits. Usa >=3072. |
+| `go-crypto-ecb-mode` | E | CWE-327 |  | BlockMode usado directamente sobre bloques sin CBC/GCM = ECB. Nunca es seguro. |
+| `go-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos. Usa sha256+ o bcrypt/argon2 para passwords. |
+| `go-crypto-static-iv` | W | CWE-329 |  | IV construido como literal/variable fija. En CBC o GCM rompe el cifrado. |
+
 ### `go/extra.yaml` - extra (original) (5 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
@@ -444,6 +488,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `java-idor-candidate` | W | CWE-639 |  | CANDIDATO IDOR: findById/getReferenceById. Verifica owner-check antes de responder. |
 | `java-spring-cors-open` | W | CWE-346 |  | @CrossOrigin(origins="*") en endpoint con credenciales/auth. Revisa politica. |
 
+### `java/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `java-crypto-util-random-for-security` | E | CWE-338 |  | java.util.Random NO es CSPRNG. Usa java.security.SecureRandom. |
+| `java-crypto-weak-rsa-dsa-keysize` | E | CWE-326 |  | KeyPairGenerator con <2048 bits. Afecta RSA/DSA/DH. |
+| `java-crypto-ecb-mode` | E | CWE-327 |  | Cipher.getInstance con modo ECB o algoritmo que lo usa por defecto (plain 'AES' = AES/ECB). |
+| `java-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos. Para passwords usa BCrypt/Argon2; para firma usa SHA-256+. |
+| `java-crypto-static-iv` | W | CWE-329 |  | IvParameterSpec con array literal o repetitivo. En CBC/GCM compromete el cifrado. |
+
 ### `java/extra.yaml` - extra (original) (5 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
@@ -516,6 +570,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `ruby-weak-hash` | W | CWE-327 |  | MD5/SHA1 para passwords/tokens. Usa BCrypt o Argon2. |
 | `ruby-idor-candidate` | W | CWE-639 |  | CANDIDATO IDOR: lookup con params[:id]. Verifica owner-check (current_user.id) antes de responder. |
 | `ruby-tls-verification-disabled` | E | CWE-295 |  | OpenSSL VERIFY_NONE en HTTPS. MITM trivial. |
+
+### `ruby/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `ruby-crypto-rand-for-security` | E | CWE-338 |  | Kernel#rand / Random.new no son CSPRNG. Usa SecureRandom.hex / SecureRandom.random_bytes. |
+| `ruby-crypto-weak-rsa` | E | CWE-326 |  | OpenSSL::PKey::RSA.new con bits <2048. |
+| `ruby-crypto-ecb-mode` | E | CWE-327 |  | OpenSSL::Cipher con modo ECB nunca es seguro. |
+| `ruby-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos. Usa SHA-256+ o BCrypt para passwords. |
+| `ruby-crypto-static-iv` | W | CWE-329 |  | IV con string literal corta. En CBC/GCM compromete el cifrado. |
 
 ### `ruby/extra.yaml` - extra (original) (5 rules)
 
@@ -600,6 +664,16 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `rust-idor-candidate` | W | CWE-639 |  | CANDIDATO IDOR: lookup por id. Verifica owner-check antes de responder. |
 | `rust-unwrap-in-handler` | I | CWE-248 |  | .unwrap() sobre valor de request -> panic (DoS). |
 
+### `rust/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `rust-crypto-non-csprng` | E | CWE-338 |  | rand::thread_rng / rand::random no garantizan CSPRNG estrictamente. Para cripto usa rand::rngs::OsRng o getrandom::getrandom. |
+| `rust-crypto-weak-rsa-keysize` | E | CWE-326 |  | RsaPrivateKey::new con bits <2048. Usa >=3072. |
+| `rust-crypto-ecb-mode` | E | CWE-327 |  | ECB nunca es seguro. Usa aes-gcm o aes-cbc + HMAC. |
+| `rust-crypto-weak-hash-for-security` | W | CWE-327 |  | MD5/SHA1 estan rotos. Usa sha2::Sha256+ o Argon2/bcrypt para passwords. |
+| `rust-crypto-static-key-or-iv` | W | CWE-321 |  | Clave/IV construido con array literal corto en el codigo. En A&D el codigo es publico. |
+
 ### `rust/extra.yaml` - extra (original) (5 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
@@ -653,7 +727,7 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 
 ## C / C++
 
-### `c/c.yaml` - c (18 rules)
+### `c/c.yaml` - c (20 rules)
 
 | Rule ID | Sev | CWE | Impact | Description |
 |---|---|---|---|---|
@@ -675,6 +749,18 @@ Severity: **E** = ERROR, **W** = WARNING, **I** = INFO. Impact is the `metadata.
 | `c-strncmp-attacker-length` | E | CWE-187 | auth-bypass | strncmp/memcmp length taken from strlen() of one operand. If that operand is attacker input, an EMPTY password (or a prefix) matches. Compa… |
 | `c-timing-unsafe-secret-compare` | I | CWE-208 | auth-bypass | Secret/password/token compared with strcmp/memcmp (early exit, timing oracle). Use a constant-time compare (CRYPTO_memcmp, sodium_memcmp). |
 | `c-signed-length-check` | W | CWE-195 | rce | Signed length compared against an upper bound only, then used as a size. A negative length passes "if (len > MAX)" and becomes a huge size_… |
+| `c-char-eof-comparison` | W | CWE-197 | auth-bypass | fgetc()/getc()/getchar() result stored in a 'char' and compared with EOF. A 0xff byte becomes -1 == EOF, so attacker data can end a string… |
+| `c-sprintf-hex-signed-char` | E | CWE-787 | rce | A plain/signed char is formatted with %x/%02x. Bytes >= 0x80 are sign-extended and printed as "ffffff80" (8 chars, not 2), so a buffer size… |
+
+### `c/crypto.yaml` - crypto (5 rules)
+
+| Rule ID | Sev | CWE | Impact | Description |
+|---|---|---|---|---|
+| `cpp-random-device-truncated-to-small-int` | E | CWE-331: Insufficient Entropy |  | random_device() devuelve 32 bits pero se asigna a un tipo pequeno (uint8_t/uint16_t/int8_t/int16_t/char), truncando entropia a <=16 bits. E… |
+| `cpp-non-cryptographic-prng` | W | CWE-338: Weak PRNG |  | mt19937 / default_random_engine / linear_congruential_engine NO son criptograficamente seguros. Para claves, nonces o tokens usa std::rando… |
+| `cpp-hardcoded-db-credentials` | E | CWE-798: Hardcoded Credentials |  | Credenciales de DB hardcodeadas. En A&D el codigo es publico y la DB es alcanzable si el puerto esta expuesto. Cargalas del entorno. |
+| `cpp-grpc-insecure-credentials` | W | CWE-319: Cleartext Transmission |  | gRPC con InsecureServerCredentials. En produccion exponerse sin TLS permite MITM y escucha de tokens. En A&D interno es menos critico. |
+| `cpp-single-call-random-device-seed` | I | CWE-335: Incorrect Usage of Seeds |  | Se usa random_device() una sola vez para sembrar. Para claves cripto, llena un buffer completo (std::seed_seq / RAND_bytes). Un unico uint… |
 
 ### `c/taint.yaml` - taint / dataflow (3 rules)
 

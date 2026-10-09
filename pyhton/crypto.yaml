@@ -9,15 +9,21 @@ rules:
     category: security
     cwe: CWE-338
     confidence: HIGH
-  pattern-either:
-  - pattern: random.random()
-  - pattern: random.randint(...)
-  - pattern: random.randrange(...)
-  - pattern: random.choice(...)
-  - pattern: random.sample(...)
-  - pattern: random.getrandbits(...)
-  - pattern: numpy.random.randint(...)
-  - pattern: np.random.randint(...)
+  patterns:
+  - pattern-either:
+    - pattern: random.random()
+    - pattern: random.randint(...)
+    - pattern: random.randrange(...)
+    - pattern: random.choice(...)
+    - pattern: random.sample(...)
+    - pattern: random.getrandbits(...)
+    - pattern: numpy.random.randint(...)
+    - pattern: np.random.randint(...)
+  # cosmetic randomness: "if random.randint(0, 5) == 0:", picking a quote
+  - pattern-not-inside: random.$FN(...) == $X
+  - pattern-not-inside: random.$FN(...) < $X
+  - pattern-not-inside: random.$FN(...) > $X
+  - pattern-not-regex: (?i)random\.choice\(\s*[\w.]*(quote|message|msg|greeting|joke|motd|banner|fact|tip|emoji|colou?r)s?\s*\)
 - id: py-crypto-rsa-weak-keysize
   languages:
   - python
@@ -80,3 +86,82 @@ rules:
     - pattern: AES.new($K, $M, iv=b"...")
     - pattern: AES.new($K, $M, nonce=b"...")
     - pattern: AES.new($K, $M, bytes(...))
+- id: py-crypto-dsa-verify-no-range-check
+  languages:
+  - python
+  severity: ERROR
+  message: >
+    Hand-rolled DSA/ECDSA verify inverts s without first checking 0 < r < q
+    and 0 < s < q. Degenerate signatures such as r = 1, s = 0 (mod q) make
+    inverse() return 0, so v = g^0 * y^0 = 1 = r and ANY message verifies
+    -> login as any user. Patch: reject the signature unless 0 < r < q and
+    0 < s < q before computing w.
+  metadata:
+    category: security
+    cwe: CWE-347
+    confidence: HIGH
+    ad-impact: auth-bypass
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        def $F(...):
+          ...
+    - pattern-inside: |
+        async def $F(...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*verif.*
+  - pattern-either:
+    - pattern: $W = inverse($S, $Q)
+    - pattern: $W = pow($S, -1, $Q)
+    - pattern: $W = gmpy2.invert($S, $Q)
+    - pattern: $W = number.inverse($S, $Q)
+  # some range / zero check on s (or r) happens before the inversion
+  - pattern-not-inside: |
+      if <... $S ...>:
+        ...
+      ...
+  - pattern-not-inside: |
+      if not <... $S ...>:
+        ...
+      ...
+  - pattern-not-inside: |
+      assert <... $S ...>
+      ...
+- id: py-crypto-dsa-static-nonce
+  languages:
+  - python
+  severity: ERROR
+  message: >
+    DSA/ECDSA nonce k is derived deterministically from data that does not
+    include the message (e.g. k = H(public_key)). Every signature reuses the
+    same k, so two signatures (s1 - s2 = (H(m1) - H(m2)) / k) reveal k and
+    then the private key x. Patch: k = secrets.randbelow(q - 1) + 1 (or
+    RFC 6979 over the private key AND the message).
+  metadata:
+    category: security
+    cwe: CWE-323
+    confidence: HIGH
+    ad-impact: auth-bypass
+  patterns:
+  - pattern-either:
+    - pattern-inside: |
+        def $F(self, $MSG, ...):
+          ...
+    - pattern-inside: |
+        def $F($MSG, ...):
+          ...
+  - metavariable-regex:
+      metavariable: $F
+      regex: (?i).*sign.*
+  - pattern-inside: |
+      $K = $GEN(...)
+      ...
+      $R = <... pow($G, $K, $P) ...>
+      ...
+  - pattern: $K = $GEN(...)
+  - pattern-not: $K = $GEN(..., <... $MSG ...>, ...)
+  - metavariable-regex:
+      metavariable: $GEN
+      regex: ^(?!.*(?i:rand|secrets|urandom|token|getRandom|SystemRandom)).*$

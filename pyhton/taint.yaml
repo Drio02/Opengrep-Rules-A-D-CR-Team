@@ -98,7 +98,8 @@ rules:
     message: >
       User-controlled object used as a MongoDB filter. A JSON body like
       {"password": {"$ne": null}} bypasses the check; "$where" runs JS.
-      Cast every field to str/int before building the query.
+      Cast every field to str/int (or type the FastAPI parameter) before
+      building the query.
     metadata:
       category: security
       cwe: CWE-943
@@ -127,24 +128,53 @@ rules:
           - pattern: await request.json()
           - pattern: await request.form()
           - pattern: await request.body()
-      # Flask / FastAPI path and query parameters bound as handler arguments
+      # Flask / FastAPI path and query parameters bound as handler arguments.
+      # FastAPI parameters annotated with a scalar type or a pydantic model
+      # are coerced/validated by the framework and cannot carry a $-operator
+      # object, and Depends(...) values come from server code: those are
+      # not sources. Untyped parameters and dict/Any/Json ones are.
       - patterns:
-          - pattern-inside: |
-              @$APP.$ROUTE(...)
-              def $FUNC(..., $PARAM, ...):
-                  ...
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FUNC(..., $PARAM, ...):
+                      ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  async def $FUNC(..., $PARAM, ...):
+                      ...
           - metavariable-regex:
               metavariable: $ROUTE
               regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
           - pattern: $PARAM
-      - patterns:
-          - pattern-inside: |
-              @$APP.$ROUTE(...)
-              async def $FUNC(..., $PARAM, ...):
+          - pattern-not-inside: |
+              def $FUNC(..., $PARAM: $TYPE, ...):
                   ...
+          - pattern-not-inside: |
+              async def $FUNC(..., $PARAM: $TYPE, ...):
+                  ...
+          - pattern-not-inside: |
+              def $FUNC(..., $PARAM = Depends(...), ...):
+                  ...
+          - pattern-not-inside: |
+              async def $FUNC(..., $PARAM = Depends(...), ...):
+                  ...
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  def $FUNC(..., $PARAM: $TYPE, ...):
+                      ...
+              - pattern-inside: |
+                  @$APP.$ROUTE(...)
+                  async def $FUNC(..., $PARAM: $TYPE, ...):
+                      ...
           - metavariable-regex:
               metavariable: $ROUTE
               regex: ^(route|get|post|put|patch|delete|api_route|websocket)$
+          - metavariable-regex:
+              metavariable: $TYPE
+              regex: \b(dict|Dict|Any|Json|Mapping|object)\b
           - pattern: $PARAM
     pattern-sanitizers:
       - pattern: str(...)
@@ -807,3 +837,63 @@ rules:
               - pattern: re.findall($R, ...)
               - pattern: re.sub($R, ...)
           - focus-metavariable: $R
+
+  # -------------------------------------------------------------------
+  # Signature / MAC oracle
+  # -------------------------------------------------------------------
+  - id: py-taint-signature-oracle
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >
+      A handler that verifies a signature/MAC also sends a freshly computed
+      signature back to the client (typically "verify failed, expected: ..."
+      in the error path). Anyone can log in by replaying the expected value,
+      or collect signed pairs to recover the key (static DSA/ECDSA nonce).
+      Patch: never return the server-side signature; reply with a generic
+      error.
+    metadata:
+      category: security
+      cwe: CWE-209
+      confidence: MEDIUM
+      ad-impact: auth-bypass
+    pattern-sources:
+      - pattern-either:
+          - pattern: $KEY.sign(...)
+          - pattern: hmac.new(...).hexdigest()
+          - pattern: hmac.new(...).digest()
+    pattern-sinks:
+      - patterns:
+          - pattern-either:
+              - pattern-inside: |
+                  def $F(...):
+                      ...
+                      <... $PUB.verify(...) ...>
+                      ...
+              - pattern-inside: |
+                  async def $F(...):
+                      ...
+                      <... $PUB.verify(...) ...>
+                      ...
+              - pattern-inside: |
+                  def $F(...):
+                      ...
+                      <... hmac.compare_digest(...) ...>
+                      ...
+              - pattern-inside: |
+                  async def $F(...):
+                      ...
+                      <... hmac.compare_digest(...) ...>
+                      ...
+          - pattern-either:
+              - pattern: web.Response(..., text=$X, ...)
+              - pattern: web.Response(..., body=$X, ...)
+              - pattern: web.json_response($X, ...)
+              - pattern: Response($X, ...)
+              - pattern: make_response($X, ...)
+              - pattern: jsonify(...)
+              - pattern: JSONResponse($X, ...)
+              - pattern: PlainTextResponse($X, ...)
+              - pattern: HTTPException(..., detail=$X, ...)
+              - pattern: abort($CODE, $X)
+              - pattern: HttpResponse($X, ...)

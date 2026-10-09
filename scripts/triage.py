@@ -21,7 +21,7 @@ def main() -> int:
         print(__doc__)
         return 1
     show_all = "--all" in sys.argv
-    with open(sys.argv[1], encoding="utf-8") as fh:
+    with open(sys.argv[1], encoding="utf-8-sig") as fh:
         report = json.load(fh)
 
     results = report.get("results", [])

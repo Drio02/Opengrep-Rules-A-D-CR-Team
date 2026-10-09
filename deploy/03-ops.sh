@@ -1,0 +1,106 @@
+#!/usr/bin/env bash
+# ---------------------------------------------------------------------
+# Step 3 - day-to-day operations and troubleshooting, from a laptop.
+#
+#   deploy/03-ops.sh doctor      check everything, print the fix for each problem
+#   deploy/03-ops.sh status      service state + URL
+#   deploy/03-ops.sh logs [-f]   last log lines of the dashboard (-f: follow)
+#   deploy/03-ops.sh restart     restart the dashboard (re-applies the firewall)
+#   deploy/03-ops.sh update      pull the latest rules/dashboard code + restart
+#                                (no internet on the exploiter: the branch is
+#                                uploaded from this clone; --offline / --online)
+#   deploy/03-ops.sh sync        refresh the service copies ON THE EXPLOITER
+#   deploy/03-ops.sh fetch [--refresh] [DIR]
+#                                copy / update the services on THIS laptop
+#                                (default DIR: parent folder of the repo; git
+#                                clones are fast-forwarded, plain copies are
+#                                only replaced with --refresh, old one kept .bak)
+#   deploy/03-ops.sh uninstall   remove service + firewall rule (keeps labels)
+#   deploy/03-ops.sh purge       uninstall + delete user, labels and copies
+# ---------------------------------------------------------------------
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+
+CMD="${1:-}"; shift || true
+case "$CMD" in
+  doctor|status|logs|restart|update|sync|fetch|uninstall|purge) ;;
+  *) awk 'NR>1 && !/^#/{exit} NR>2{sub(/^# ?/,""); print}' "$0"; exit 1 ;;
+esac
+load_env
+URL="http://$EXPLOITER_IP:$DASH_PORT"
+
+need_exploiter() {
+  local rc=0 out
+  out=$(on_exploiter -n true 2>&1) || rc=$?
+  [[ $rc -eq 0 ]] || die "cannot log into the exploiter: $(tail -1 <<<"$out")" "$(ssh_hint "$out")"
+}
+
+case "$CMD" in
+doctor)
+  step "this laptop"
+  [[ -f "$TEAM_KEY" ]] && ok "team key $TEAM_KEY" || { fail "team key $TEAM_KEY missing"; fix "deploy/01-setup-laptop.sh --key <file>"; }
+  for target in "vulnbox $VULNBOX_IP" "exploiter $EXPLOITER_IP"; do
+    read -r name ip <<<"$target"
+    if timeout 5 bash -c "exec 3<>/dev/tcp/$ip/22" 2>/dev/null; then ok "VPN: $name $ip:22 reachable"
+    else fail "VPN: $name $ip:22 not reachable"; fix "bring the WireGuard VPN up, then: ping $ip"; fi
+  done
+  rc=0; out=$(on_vulnbox -n true 2>&1) || rc=$?
+  [[ $rc -eq 0 ]] && ok "SSH vulnbox" || { fail "SSH vulnbox: $(tail -1 <<<"$out")"; fix "$(ssh_hint "$out")"; }
+  rc=0; out=$(on_exploiter -n true 2>&1) || rc=$?
+  if [[ $rc -eq 0 ]]; then ok "SSH exploiter"
+  else fail "SSH exploiter: $(tail -1 <<<"$out")"; fix "$(ssh_hint "$out")"; exit 2; fi
+  if page=$(curl -s --max-time 8 "$URL/") && grep -q "<title>" <<<"$page"; then
+    myip=$(curl -s --max-time 8 "$URL/api/me" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("ip",""))' 2>/dev/null || true)
+    ok "dashboard $URL answers (it sees this laptop as ${myip:-?})"
+  else
+    fail "dashboard $URL does not answer from this laptop"
+    fix "if the exploiter checks below are OK: this laptop's VPN IP is not in DASH_ALLOW ($DASH_ALLOW)"
+  fi
+  rc=0; run_remote doctor || rc=$?
+  echo
+  if [[ $FAILS -eq 0 && $rc -eq 0 ]]; then echo "${C_OK}All checks passed.${C_0}"
+  else echo "${C_ERR}Problems found.${C_0} Apply the '->' fixes; if unsure, re-run deploy/02-deploy-exploiter.sh (safe to repeat)."; exit 2; fi
+  ;;
+status)
+  need_exploiter
+  on_exploiter -n "systemctl --no-pager status $SERVICE_NAME.service | head -12; echo; ss -ltnH 'sport = :$DASH_PORT'"
+  echo; echo "URL: $URL/"
+  ;;
+logs)
+  need_exploiter
+  if [[ "${1:-}" == -f ]]; then on_exploiter -t "journalctl -u $SERVICE_NAME.service -f -o cat"
+  else on_exploiter -n "journalctl -u $SERVICE_NAME.service --no-pager -n 80 -o cat"; fi
+  ;;
+restart)
+  need_exploiter
+  sudo=""; [[ "$EXPLOITER_USER" == root ]] || sudo="sudo -n"
+  on_exploiter -n "$sudo systemctl restart $SERVICE_NAME.service && sleep 2 && systemctl is-active $SERVICE_NAME.service"
+  ;;
+fetch)
+  refresh=""; dir="$LOCAL_SERVICES_DIR"
+  for a in "$@"; do [[ "$a" == --refresh ]] && refresh=refresh || dir="$a"; done
+  step "services of $VULNBOX_IP -> $(realpath -m "$dir") (read-only on the vulnbox)"
+  fetch_services "$dir" "$refresh"
+  echo; [[ $FAILS -eq 0 ]] && echo "${C_OK}Done.${C_0}" || { echo "${C_ERR}$FAILS problem(s).${C_0}"; exit 2; }
+  ;;
+update)
+  need_exploiter
+  [[ "${1:-}" == --offline ]] && OFFLINE=yes
+  [[ "${1:-}" == --online ]] && OFFLINE=no
+  decide_offline
+  [[ $OFFLINE_ACTIVE -eq 1 ]] && prepare_offline repo-only
+  rc=0; run_remote update || rc=$?
+  cleanup_uploads; exit $rc
+  ;;
+sync)
+  need_exploiter
+  run_remote sync
+  ;;
+uninstall|purge)
+  need_exploiter
+  what="the dashboard service and its firewall rule (labels and service copies are kept)"
+  [[ $CMD == purge ]] && what="the dashboard service, firewall rule, user $DASH_USER, ALL labels and service copies"
+  read -r -p "Remove $what from $EXPLOITER_IP? [y/N] " answer
+  [[ "$answer" =~ ^[yYsS]$ ]] || { echo "Nothing changed."; exit 0; }
+  run_remote "$CMD"
+  ;;
+esac
